@@ -1,0 +1,47 @@
+# ---- large / fetched artifacts (GitHub Release instead) ----
+prebuilts/*
+!prebuilts/SHA256SUMS
+*.apk
+*.tar.gz
+out/
+build/
+**/build/
+
+# ---- host / session scratch, not part of the deliverable ----
+supervisor.log
+supervisor_cron.py
+supervisor_cron.sh
+supervisor_daemon.sh
+.supervisor_state.json
+payload-sha.txt
+/bin/
+/toutiao/
+/night2/
+/stackfix/
+/icushim/
+/conscrypt-shim/
+/colormatrix/
+/permfix/
+amr/oh-adapter-runtime*.jar
+amr/*.jar
+
+# ---- host-specific transport (documented in README, not portable) ----
+hdc-remote
+hdc-relay.ps1
+
+# ---- junk ----
+._*
+.DS_Store
+__pycache__/
+*.pyc
+*.log
+core
+*.core
+
+# root copies live in docs/
+README_REPRODUCE.md
+WHITEBOARD.md
+# host-bound helper superseded by amr/build_amr.sh + scripts/deploy_and_run.sh
+amr/rebuild_and_deploy.sh
+amr/patch_relayout.py
+amr/*.orig

@@ -1,0 +1,120 @@
+# 今日头条 MainActivity 首帧控件树（Android View 层级）
+# 板端 OpenHarmony 6.1.0.31 / DAYU200 / aarch64
+# 由 ActivityManagerRouting 的进程内探针 dump（uitest 只能看到 ArkUI 树，看不到 Android view）
+# 采集时间 2026-09-05 16:37，进程存活 110s+
+
+==== pass 4: 2 window(s) ====
+--- window[0] params=w=-1 h=-1 type=1 flags=0x81810100 title={(0,0)(fillxfill) sim={adjust=nothing} ty=BASE_APPLICATION wanim=0x10302fe
+#0 com.android.internal.policy.DecorView vis=VISIBLE shown=true @0,0 1200x1920
+  #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 1200x1920
+    #0 android.view.ViewStub vis=GONE shown=false @0,0 0x0
+    #1 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1920
+      #0 androidx.appcompat.widget.FitWindowsLinearLayout vis=VISIBLE shown=true @0,0 1200x1920
+        #0 androidx.appcompat.widget.ViewStubCompat vis=GONE shown=false @0,0 0x0
+        #1 androidx.appcompat.widget.ContentFrameLayout vis=VISIBLE shown=true @0,0 1200x1920
+          #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 1200x1920
+            #0 android.view.View vis=GONE shown=false @0,0 0x0
+            #1 com.ss.android.article.common.view.SSTabHost vis=VISIBLE shown=true @0,0 1200x1920
+              #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1821
+                #0 com.android.bytedance.homepage.searchbar.StreamViewPager vis=VISIBLE shown=true @0,0 1200x1821
+                  #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1821
+                    #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,254 1200x1567
+                      #0 android.view.View vis=GONE shown=false @0,0 0x0
+                      #1 android.view.View vis=GONE shown=false @0,0 0x0
+                      #2 com.ss.android.article.base.feature.feed.view.FeedCommonRefreshView vis=VISIBLE shown=true @0,0 1200x1567
+                        #0 com.ss.android.article.base.ui.SSAdLoadingLayout vis=INVISIBLE shown=false @0,-940 1200x940
+                        #1 com.ss.android.article.base.feature.feed.view.FeedCommonRecyclerView vis=VISIBLE shown=true @0,0 1200x1567
+                      #3 android.view.ViewStub vis=GONE shown=false @0,0 0x0
+                      #4 android.view.ViewStub vis=GONE shown=false @0,0 0x0
+                    #1 com.bytedance.article.common.ui.LoadingFlashView vis=VISIBLE shown=true @420,947 360x180
+                      #0 com.bytedance.article.common.ui.TTLoadingView vis=VISIBLE shown=true @0,0 360x180
+                        #0 android.widget.ImageView vis=VISIBLE shown=true @0,0 360x180
+                    #2 com.ss.android.article.base.ui.SSViewStub vis=GONE shown=false @0,0 0x0
+                #1 android.view.ViewStub vis=GONE shown=false @0,0 0x0
+                #2 android.view.ViewStub vis=GONE shown=false @0,0 0x0
+                #3 android.view.ViewStub vis=GONE shown=false @0,0 0x0
+                #4 android.view.ViewStub vis=GONE shown=false @0,0 0x0
+              #1 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1920
+              #2 com.ss.android.article.base.ui.SSViewStub vis=GONE shown=false @0,0 0x0
+              #3 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x254
+                #0 com.android.bytedance.homepage.searchbar.refactor.HomePageSearchBar vis=VISIBLE shown=true @0,0 1200x254
+                  #0 androidx.constraintlayout.widget.ConstraintLayout vis=VISIBLE shown=true @0,0 1200x254
+                    #0 com.android.bytedance.homepage.searchbar.refactor.view.TopBarBackgroundView vis=GONE shown=false @0,0 0x0
+                      #0 android.view.View vis=VISIBLE shown=false @0,0 0x0
+                      #1 com.android.bytedance.homepage.searchbar.refactor.view.TopBarBackgroundImgView vis=INVISIBLE shown=false @0,0 0x0
+                    #1 androidx.constraintlayout.widget.ConstraintLayout vis=VISIBLE shown=true @0,0 1200x254
+                      #0 android.view.View vis=VISIBLE shown=true @0,0 1200x172
+                      #1 android.view.View vis=INVISIBLE shown=false @0,0 1200x54
+                      #2 androidx.constraintlayout.widget.ConstraintLayout vis=VISIBLE shown=true @36,68 1128x90
+                        #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,45 0x0
+                        #1 android.view.View vis=VISIBLE shown=true @0,0 0x90
+                        #2 android.widget.LinearLayout vis=VISIBLE shown=true @962,2 166x86
+                        #3 com.ss.android.common.ui.view.CropRelativeLayout vis=VISIBLE shown=true @0,0 962x90
+                        #4 android.widget.RelativeLayout vis=GONE shown=false @0,0 0x0
+                      #3 android.widget.FrameLayout vis=VISIBLE shown=true @0,172 1200x82
+                        #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 1200x82
+              #4 android.widget.FrameLayout vis=VISIBLE shown=true @0,1821 1200x99
+                #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 0x0
+                #1 android.widget.TabWidget vis=VISIBLE shown=true @0,0 1200x99
+                  #0 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @0,0 300x99
+                    #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54
+                    #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54
+                    #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @130,61 40x29 text="头条"
+                    #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99
+                    #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4
+                    #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18
+                    #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94
+                    #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92
+                      #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63
+                      #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 text=""
+                      #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92
+                  #1 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @300,0 300x99
+                    #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54
+                    #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54
+                    #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @130,61 40x29 text="视频"
+                    #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99
+                    #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4
+                    #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18
+                    #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94
+                    #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92
+                      #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63
+                      #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 text=""
+                      #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92
+                  #2 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @600,0 300x99
+                    #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54
+                    #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54
+                    #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @120,61 60x29 text="放映厅"
+                    #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99
+                    #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4
+                    #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18
+                    #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94
+                    #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92
+                      #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63
+                      #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 text=""
+                      #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92
+                  #3 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @900,0 300x99
+                    #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54
+                    #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54
+                    #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @120,61 60x29 text="未登录"
+                    #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99
+                    #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4
+                    #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18
+                    #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94
+                    #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92
+                      #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63
+                      #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 text=""
+                      #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92
+              #5 android.view.ViewStub vis=GONE shown=false @0,0 0x0
+              #6 android.widget.RelativeLayout vis=GONE shown=false @0,0 0x0
+                #0 android.widget.RelativeLayout vis=VISIBLE shown=false @0,0 0x0
+                  #0 androidx.appcompat.widget.AppCompatImageView vis=VISIBLE shown=false @0,0 0x0
+                #1 com.ss.android.image.AsyncImageView vis=VISIBLE shown=false @0,0 0x0
+              #7 android.widget.FrameLayout vis=GONE shown=false @0,0 0x0
+              #8 android.widget.FrameLayout vis=GONE shown=false @0,0 0x0
+              #9 android.view.ViewStub vis=GONE shown=false @0,0 0x0
+              #10 android.view.ViewStub vis=GONE shown=false @0,0 0x0
+              #11 android.view.SurfaceView vis=GONE shown=false @0,0 0x0
+--- window[1] params=w=0 h=-1 type=1000 flags=0x41820008 title={(0,0)(0xfill) gr=TOP START CENTER sim={state=always_visible adjust=resize} ty=APPLICATION_PANEL fmt=TRANSPARENT surfaceInsets=Rect(0, 0 - 0, 0) (manual)
+#0 android.widget.PopupWindow$PopupDecorView vis=VISIBLE shown=true @0,0 0x0
+  #0 android.widget.PopupWindow$PopupBackgroundView vis=VISIBLE shown=true @0,0 0x0
+    #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 0x0

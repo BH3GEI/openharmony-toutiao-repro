@@ -1,0 +1,50 @@
+import zipfile, struct, sys
+exec(open('/tmp/dexcore.py').read())
+
+W = {}
+def setw(a,b,w):
+    for o in range(a,b+1): W[o]=w
+setw(0x00,0x01,1); setw(0x02,0x02,2); setw(0x03,0x03,3); setw(0x04,0x04,1)
+setw(0x05,0x05,2); setw(0x06,0x06,3); setw(0x07,0x07,1); setw(0x08,0x08,2)
+setw(0x09,0x09,3); setw(0x0a,0x12,1); setw(0x13,0x13,2); setw(0x14,0x14,3)
+setw(0x15,0x15,2); setw(0x16,0x16,2); setw(0x17,0x17,3); setw(0x18,0x18,5)
+setw(0x19,0x1a,2); setw(0x1b,0x1b,3); setw(0x1c,0x1c,2); setw(0x1d,0x1e,1)
+setw(0x1f,0x20,2); setw(0x21,0x21,1); setw(0x22,0x23,2); setw(0x24,0x26,3)
+setw(0x27,0x28,1); setw(0x29,0x29,2); setw(0x2a,0x2a,3); setw(0x2b,0x2c,3)
+setw(0x2d,0x31,2); setw(0x32,0x3d,2); setw(0x3e,0x43,1); setw(0x44,0x6d,2)
+setw(0x6e,0x72,3); setw(0x73,0x73,1); setw(0x74,0x78,3); setw(0x79,0x7a,1)
+setw(0x7b,0x8f,1); setw(0x90,0xaf,2); setw(0xb0,0xcf,1); setw(0xd0,0xe2,2)
+setw(0xe3,0xf9,1); setw(0xfa,0xfb,4); setw(0xfc,0xfd,3); setw(0xfe,0xff,2)
+
+NAMES={0x12:'const/4',0x13:'const/16',0x14:'const',0x15:'const/high16',0x1a:'const-string',
+ 0x1c:'const-class',0x22:'new-instance',0x23:'new-array',0x26:'fill-array-data',
+ 0x0e:'return-void',0x70:'invoke-direct',0x71:'invoke-static',0x6e:'invoke-virtual',
+ 0x6f:'invoke-super',0x72:'invoke-interface',0x0c:'move-result-object',0x0a:'move-result',
+ 0x67:'sput-object',0x60:'sget',0x62:'sget-object',0x69:'sput-object',0x1f:'check-cast',0x00:'nop'}
+
+z=zipfile.ZipFile('/tmp/wlbuild/base.patched.apk')
+b=bytearray(z.read('classes6.dex'))
+d=Dex(b)
+code_off=0x7e4c6c
+regs,ins,outs,tries,dbg,n=struct.unpack_from('<HHHHII', b, code_off)
+base=code_off+16
+pc=0
+while pc < n:
+    u=struct.unpack_from('<H', b, base+2*pc)[0]
+    op=u&0xff
+    w=W.get(op,1)
+    if op==0x00 and (u>>8)!=0: break
+    raw=' '.join(f'{struct.unpack_from("<H",b,base+2*(pc+k))[0]:04x}' for k in range(w))
+    extra=''
+    if op in (0x22,0x1c,0x1f,0x23):
+        ti=struct.unpack_from('<H', b, base+2*(pc+1))[0]; extra=' '+d.typ(ti)
+    elif 0x6e<=op<=0x72 or 0x74<=op<=0x78:
+        mi=struct.unpack_from('<H', b, base+2*(pc+1))[0]
+        c,nm,pr=d.meth(mi); extra=f' {c}->{nm}{d.proto_desc(pr)}'
+    elif 0x60<=op<=0x6d:
+        fi=struct.unpack_from('<H', b, base+2*(pc+1))[0]
+        c,t,nm=d.fld(fi); extra=f' {c}->{nm}:{t}'
+    elif op==0x1a:
+        si=struct.unpack_from('<H', b, base+2*(pc+1))[0]; extra=' "'+d.string(si)[:40]+'"'
+    print(f'{pc:04x}: [{raw:<20}] {NAMES.get(op,hex(op)):<18}{extra}')
+    pc+=w
