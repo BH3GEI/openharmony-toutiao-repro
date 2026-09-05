@@ -159,12 +159,41 @@ MMI 订阅（`docs/INPUT_PATH_ANALYSIS.md` 第 5 节）。但绕开它之后，*
    没有它，触摸一碰到任何可滚动容器就抛 `UnsatisfiedLinkError`，
    而这个异常被 ViewRootImpl 的阶段链吞掉，表现为"事件送到了但什么也没发生"。
 
+坐标不再靠猜：`dump` 现在打的是 `getLocationOnScreen` 的**绝对**矩形与中心点
+（`frames/mainactivity/MAINACTIVITY-viewtree-abs.txt`）。相对坐标在这里没用——
+`SSTabHost` 的孩子因为 Gravity/Margin 大多报 `@0,0`，而底部导航的真实位置是
+`TabWidget abs=[0,1821][1200,1920]`，四个 Tab 中心分别在
+`x=150 / 450 / 750 / 1050，y=1870`。
+
 | # | 界面 | 动作 | 结果 | 截图 |
 |---|---|---|---|---|
 | 1 | 推荐（基线）| — | ✅ | ![](frames/screens/10-pump-00-baseline-recommend.jpeg) |
-| 2 | **热榜** | `wl_input.sh tapv 320 213` | ✅ 红线移位，页面换成热榜空态 | ![](frames/screens/11-pump-tapv-hotlist.jpeg) |
-| 3 | **视频** | `wl_input.sh tapv 560 213` | ✅ 频道行自身滚动，页面换成视频空态 | ![](frames/screens/12-pump-tapv-video.jpeg) |
-| 4 | **娱乐** | `wl_input.sh tap 840 213` | ✅ 走 ViewRootImpl 正式路径，同样成功 | ![](frames/screens/13-pump-tap-entertainment.jpeg) |
+| 2 | **热榜** | `tapv 320 213` | ✅ 红线移位，页面换成热榜空态 | ![](frames/screens/11-pump-tapv-hotlist.jpeg) |
+| 3 | **视频（频道）** | `tapv 560 213` | ✅ 频道行自身滚动，页面换成视频空态 | ![](frames/screens/12-pump-tapv-video.jpeg) |
+| 4 | **娱乐** | `tap 840 213` | ✅ 走 ViewRootImpl 正式路径，同样成功 | ![](frames/screens/13-pump-tap-entertainment.jpeg) |
+| 5 | **放映厅** | `tap 750 1870` | ✅ 频道行整排换成 推荐/电影/电视剧/少儿/纪录片/综艺/动漫 | ![](frames/screens/14-nav-cinema.jpeg) |
+| 6 | **视频（底部大屏）** | `tap 450 1870` | ✅ **整页深色主题**，子频道换成 精选/推荐/放映厅，像素差 **99.76%** | ![](frames/screens/15-nav-video-darktheme.jpeg) |
+| 7 | **下拉刷新** | `swipe 600 500 600 1300 500` | ✅ 顶部露出「⊙ 正在加载…」刷新条 | ![](frames/screens/16-pull-to-refresh.jpeg) |
+| 8 | 未登录 / 我的 | `tap 1050 1870` | ❌ 无变化（见下） | — |
+| 9 | 顶部搜索框 | `tap 517 113` | ❌ 无变化（见下） | — |
+
+### 第 8、9 项为什么还不行
+
+**不是投递问题。** 坐标经绝对矩形核对无误（`MainTabIndicator abs=[900,1821][1200,1920]`、
+搜索框 `CropRelativeLayout abs=[36,68][998,158] CLICKABLE`），事件也确实送到了
+`type=1 BASE_APPLICATION` 主窗口，日志无异常，`UnsatisfiedLinkError` 计数为 0。
+
+但点完之后：主窗口控件树里没有出现「我的」页面，窗口数仍是 2
+（主窗口 + 那个被我们中和掉的 `PopupWindow$PopupDecorView`，`0x0`），
+逐像素差 **0.00%**。
+
+两者的共同点是**都要拉起新的东西**（搜索页是 `SearchActivity`；「我的」在未登录态下
+通常先弹登录）。而本仓早已记录：新 Activity 能 `aa start` 拉起却不上屏，
+子窗口/弹窗又被首帧修复主动中和。所以这两项大概率撞在**新窗口上屏**这条独立的缺口上，
+而不是输入链路。**尚未证实到根因，不下定论。**
+
+对照之下，第 2–7 项全部是 **MainActivity 内部**的 Fragment/Tab 切换——
+这一类现在 100% 可驱动。
 
 两条投递路径都通：`tap` 走
 `InputEventBridge.dispatchOnMainThread` → `InputEventReceiver.dispatchInputEvent`

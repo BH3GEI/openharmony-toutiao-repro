@@ -1,0 +1,230 @@
+WL-VIEWTREE] ==== pass 99: 2 window(s) ====
+WL-VIEWTREE] --- window[0] params=w=-1 h=-1 type=1 flags=0x81810100 title={(0,0)(fillxfill) sim={adjust=nothing} ty=BASE_APPLICATION wanim=0x10302fe
+WL-VIEWTREE] #0 com.android.internal.policy.DecorView vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]   #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]     #0 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]     #1 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]       #0 androidx.appcompat.widget.FitWindowsLinearLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]         #0 androidx.appcompat.widget.ViewStubCompat vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]         #1 androidx.appcompat.widget.ContentFrameLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]           #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]             #0 android.view.View vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]             #1 com.ss.android.article.common.view.SSTabHost vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]               #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1821 abs=[0,0][1200,1821] c=(600,910)
+WL-VIEWTREE]                 #0 com.android.bytedance.homepage.searchbar.StreamViewPager vis=VISIBLE shown=true @0,0 1200x1821 abs=[0,0][1200,1821] c=(600,910)
+WL-VIEWTREE]                   #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1821 abs=[0,0][1200,1821] c=(600,910)
+WL-VIEWTREE]                     #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,254 1200x1567 abs=[0,254][1200,1821] c=(600,1037)
+WL-VIEWTREE]                       #0 android.view.View vis=GONE shown=false @0,0 0x0 abs=[0,254][0,254]
+WL-VIEWTREE]                       #1 android.view.View vis=GONE shown=false @0,0 0x0 abs=[0,254][0,254]
+WL-VIEWTREE]                       #2 com.ss.android.article.base.feature.feed.view.FeedCommonRefreshView vis=VISIBLE shown=true @0,0 1200x1567 abs=[0,254][1200,1821] c=(600,1037)
+WL-VIEWTREE]                         #0 com.ss.android.article.base.ui.SSAdLoadingLayout vis=INVISIBLE shown=false @0,-940 1200x940 abs=[0,-686][1200,254] c=(600,-216)
+WL-VIEWTREE]                         #1 com.ss.android.article.base.feature.feed.view.FeedCommonRecyclerView vis=VISIBLE shown=true @0,0 1200x1567 abs=[0,254][1200,1821] c=(600,1037)
+WL-VIEWTREE]                       #3 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,254][0,254]
+WL-VIEWTREE]                       #4 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,254][0,254]
+WL-VIEWTREE]                     #1 com.bytedance.article.common.ui.LoadingFlashView vis=VISIBLE shown=true @420,947 360x180 abs=[420,947][780,1127] c=(600,1037)
+WL-VIEWTREE]                       #0 com.bytedance.article.common.ui.TTLoadingView vis=VISIBLE shown=true @0,0 360x180 abs=[420,947][780,1127] c=(600,1037)
+WL-VIEWTREE]                         #0 android.widget.ImageView vis=VISIBLE shown=true @0,0 360x180 abs=[420,947][780,1127] c=(600,1037)
+WL-VIEWTREE]                     #2 com.ss.android.article.base.ui.SSViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #1 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #2 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #3 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #4 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #1 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]               #2 com.ss.android.article.base.ui.SSViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #3 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x254 abs=[0,0][1200,254] c=(600,127)
+WL-VIEWTREE]                 #0 com.android.bytedance.homepage.searchbar.refactor.HomePageSearchBar vis=VISIBLE shown=true @0,0 1200x254 abs=[0,0][1200,254] c=(600,127)
+WL-VIEWTREE]                   #0 androidx.constraintlayout.widget.ConstraintLayout vis=VISIBLE shown=true @0,0 1200x254 abs=[0,0][1200,254] c=(600,127)
+WL-VIEWTREE]                     #0 com.android.bytedance.homepage.searchbar.refactor.view.TopBarBackgroundView vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                       #0 android.view.View vis=VISIBLE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                       #1 com.android.bytedance.homepage.searchbar.refactor.view.TopBarBackgroundImgView vis=INVISIBLE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                     #1 androidx.constraintlayout.widget.ConstraintLayout vis=VISIBLE shown=true @0,0 1200x254 abs=[0,0][1200,254] c=(600,127)
+WL-VIEWTREE]                       #0 android.view.View vis=VISIBLE shown=true @0,0 1200x172 abs=[0,0][1200,172] c=(600,86)
+WL-VIEWTREE]                       #1 android.view.View vis=INVISIBLE shown=false @0,0 1200x54 abs=[0,0][1200,54] c=(600,27)
+WL-VIEWTREE]                       #2 androidx.constraintlayout.widget.ConstraintLayout vis=VISIBLE shown=true @36,68 1128x90 abs=[36,68][1164,158] c=(600,113)
+WL-VIEWTREE]                         #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,45 0x0 abs=[36,113][36,113]
+WL-VIEWTREE]                         #1 android.view.View vis=VISIBLE shown=true @0,0 0x90 abs=[36,68][36,158]
+WL-VIEWTREE]                         #2 android.widget.LinearLayout vis=VISIBLE shown=true @962,2 166x86 abs=[998,70][1164,156] c=(1081,113)
+WL-VIEWTREE]                         #3 com.ss.android.common.ui.view.CropRelativeLayout vis=VISIBLE shown=true @0,0 962x90 abs=[36,68][998,158] c=(517,113) CLICKABLE
+WL-VIEWTREE]                         #4 android.widget.RelativeLayout vis=GONE shown=false @0,0 0x0 abs=[36,68][36,68]
+WL-VIEWTREE]                       #3 android.widget.FrameLayout vis=VISIBLE shown=true @0,172 1200x82 abs=[0,172][1200,254] c=(600,213)
+WL-VIEWTREE]                         #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 1200x82 abs=[0,172][1200,254] c=(600,213)
+WL-VIEWTREE]               #4 android.widget.FrameLayout vis=VISIBLE shown=true @0,1821 1200x99 abs=[0,1821][1200,1920] c=(600,1870)
+WL-VIEWTREE]                 #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 0x0 abs=[0,1821][0,1821]
+WL-VIEWTREE]                 #1 android.widget.TabWidget vis=VISIBLE shown=true @0,0 1200x99 abs=[0,1821][1200,1920] c=(600,1870)
+WL-VIEWTREE]                   #0 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @0,0 300x99 abs=[0,1821][300,1920] c=(150,1870) C
+WL-VIEWTREE]                     #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54 abs=[123,1828][177,1882] c=(150,1855)
+WL-VIEWTREE]                     #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54 abs=[123,1828][177,1882] c=(150,1855)
+WL-VIEWTREE]                     #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @130,61 40x29 abs=[130,1882][170,1911] c=(150,1896) text="头条"
+WL-VIEWTREE]                     #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99 abs=[0,1821][300,1920] c=(150,1870)
+WL-VIEWTREE]                     #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4 abs=[0,1826][4,1830] c=(2,1828)
+WL-VIEWTREE]                     #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18 abs=[-9,1829][9,1847] c=(0,1838)
+WL-VIEWTREE]                     #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94 abs=[0,1821][300,1915] c=(150,1868)
+WL-VIEWTREE]                     #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92 abs=[0,1824][300,1916] c=(150,1870)
+WL-VIEWTREE]                       #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63 abs=[116,1825][184,1888] c=(150,1856)
+WL-VIEWTREE]                       #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 abs=[150,1888][150,1916] text=""
+WL-VIEWTREE]                       #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92 abs=[0,1824][300,1916] c=(150,1870)
+WL-VIEWTREE]                   #1 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @300,0 300x99 abs=[300,1821][600,1920] c=(450,187
+WL-VIEWTREE]                     #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54 abs=[423,1828][477,1882] c=(450,1855)
+WL-VIEWTREE]                     #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54 abs=[423,1828][477,1882] c=(450,1855)
+WL-VIEWTREE]                     #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @130,61 40x29 abs=[430,1882][470,1911] c=(450,1896) text="视频"
+WL-VIEWTREE]                     #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99 abs=[300,1821][600,1920] c=(450,1870)
+WL-VIEWTREE]                     #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4 abs=[300,1826][304,1830] c=(302,1828)
+WL-VIEWTREE]                     #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18 abs=[291,1829][309,1847] c=(300,1838)
+WL-VIEWTREE]                     #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94 abs=[300,1821][600,1915] c=(450,1868)
+WL-VIEWTREE]                     #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92 abs=[300,1824][600,1916] c=(450,1870)
+WL-VIEWTREE]                       #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63 abs=[416,1825][484,1888] c=(450,1856)
+WL-VIEWTREE]                       #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 abs=[450,1888][450,1916] text=""
+WL-VIEWTREE]                       #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92 abs=[300,1824][600,1916] c=(450,1870)
+WL-VIEWTREE]                   #2 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @600,0 300x99 abs=[600,1821][900,1920] c=(750,187
+WL-VIEWTREE]                     #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54 abs=[723,1828][777,1882] c=(750,1855)
+WL-VIEWTREE]                     #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54 abs=[723,1828][777,1882] c=(750,1855)
+WL-VIEWTREE]                     #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @120,61 60x29 abs=[720,1882][780,1911] c=(750,1896) text="放映厅"
+WL-VIEWTREE]                     #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99 abs=[600,1821][900,1920] c=(750,1870)
+WL-VIEWTREE]                     #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4 abs=[600,1826][604,1830] c=(602,1828)
+WL-VIEWTREE]                     #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18 abs=[591,1829][609,1847] c=(600,1838)
+WL-VIEWTREE]                     #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94 abs=[600,1821][900,1915] c=(750,1868)
+WL-VIEWTREE]                     #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92 abs=[600,1824][900,1916] c=(750,1870)
+WL-VIEWTREE]                       #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63 abs=[716,1825][784,1888] c=(750,1856)
+WL-VIEWTREE]                       #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 abs=[750,1888][750,1916] text=""
+WL-VIEWTREE]                       #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92 abs=[600,1824][900,1916] c=(750,1870)
+WL-VIEWTREE]                   #3 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @900,0 300x99 abs=[900,1821][1200,1920] c=(1050,1
+WL-VIEWTREE]                     #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54 abs=[1023,1828][1077,1882] c=(1050,1855)
+WL-VIEWTREE]                     #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54 abs=[1023,1828][1077,1882] c=(1050,1855)
+WL-VIEWTREE]                     #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @120,61 60x29 abs=[1020,1882][1080,1911] c=(1050,1896) text="未登录"
+WL-VIEWTREE]                     #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99 abs=[900,1821][1200,1920] c=(1050,1870)
+WL-VIEWTREE]                     #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4 abs=[900,1826][904,1830] c=(902,1828)
+WL-VIEWTREE]                     #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18 abs=[891,1829][909,1847] c=(900,1838)
+WL-VIEWTREE]                     #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94 abs=[900,1821][1200,1915] c=(1050,1868)
+WL-VIEWTREE]                     #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92 abs=[900,1824][1200,1916] c=(1050,1870)
+WL-VIEWTREE]                       #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63 abs=[1016,1825][1084,1888] c=(1050,1856)
+WL-VIEWTREE]                       #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 abs=[1050,1888][1050,1916] text=""
+WL-VIEWTREE]                       #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92 abs=[900,1824][1200,1916] c=(1050,1870)
+WL-VIEWTREE]               #5 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #6 android.widget.RelativeLayout vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #0 android.widget.RelativeLayout vis=VISIBLE shown=false @0,0 0x0 abs=[0,0][0,0] CLICKABLE
+WL-VIEWTREE]                   #0 androidx.appcompat.widget.AppCompatImageView vis=VISIBLE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #1 com.ss.android.image.AsyncImageView vis=VISIBLE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #7 android.widget.FrameLayout vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #8 android.widget.FrameLayout vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #9 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #10 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #11 android.view.SurfaceView vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE] --- window[1] params=w=0 h=-1 type=1000 flags=0x41820008 title={(0,0)(0xfill) gr=TOP START CENTER sim={state=always_visible adjust=resize} ty=APPLICATION_PANEL fmt=TRANSPARENT surfaceInset
+WL-VIEWTREE] #0 android.widget.PopupWindow$PopupDecorView vis=VISIBLE shown=true @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]   #0 android.widget.PopupWindow$PopupBackgroundView vis=VISIBLE shown=true @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]     #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE] ==== pass 3: 2 window(s) ====
+WL-VIEWTREE] --- window[0] params=w=-1 h=-1 type=1 flags=0x81810100 title={(0,0)(fillxfill) sim={adjust=nothing} ty=BASE_APPLICATION wanim=0x10302fe
+WL-VIEWTREE] #0 com.android.internal.policy.DecorView vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]   #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]     #0 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]     #1 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]       #0 androidx.appcompat.widget.FitWindowsLinearLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]         #0 androidx.appcompat.widget.ViewStubCompat vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]         #1 androidx.appcompat.widget.ContentFrameLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]           #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]             #0 android.view.View vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]             #1 com.ss.android.article.common.view.SSTabHost vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]               #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1821 abs=[0,0][1200,1821] c=(600,910)
+WL-VIEWTREE]                 #0 com.android.bytedance.homepage.searchbar.StreamViewPager vis=VISIBLE shown=true @0,0 1200x1821 abs=[0,0][1200,1821] c=(600,910)
+WL-VIEWTREE]                   #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1821 abs=[0,0][1200,1821] c=(600,910)
+WL-VIEWTREE]                     #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,254 1200x1567 abs=[0,254][1200,1821] c=(600,1037)
+WL-VIEWTREE]                       #0 android.view.View vis=GONE shown=false @0,0 0x0 abs=[0,254][0,254]
+WL-VIEWTREE]                       #1 android.view.View vis=GONE shown=false @0,0 0x0 abs=[0,254][0,254]
+WL-VIEWTREE]                       #2 com.ss.android.article.base.feature.feed.view.FeedCommonRefreshView vis=VISIBLE shown=true @0,0 1200x1567 abs=[0,254][1200,1821] c=(600,1037)
+WL-VIEWTREE]                         #0 com.ss.android.article.base.ui.SSAdLoadingLayout vis=INVISIBLE shown=false @0,-940 1200x940 abs=[0,-686][1200,254] c=(600,-216)
+WL-VIEWTREE]                         #1 com.ss.android.article.base.feature.feed.view.FeedCommonRecyclerView vis=VISIBLE shown=true @0,0 1200x1567 abs=[0,254][1200,1821] c=(600,1037)
+WL-VIEWTREE]                       #3 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,254][0,254]
+WL-VIEWTREE]                       #4 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,254][0,254]
+WL-VIEWTREE]                     #1 com.bytedance.article.common.ui.LoadingFlashView vis=VISIBLE shown=true @420,947 360x180 abs=[420,947][780,1127] c=(600,1037)
+WL-VIEWTREE]                       #0 com.bytedance.article.common.ui.TTLoadingView vis=VISIBLE shown=true @0,0 360x180 abs=[420,947][780,1127] c=(600,1037)
+WL-VIEWTREE]                         #0 android.widget.ImageView vis=VISIBLE shown=true @0,0 360x180 abs=[420,947][780,1127] c=(600,1037)
+WL-VIEWTREE]                     #2 com.ss.android.article.base.ui.SSViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #1 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #2 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #3 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #4 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #1 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x1920 abs=[0,0][1200,1920] c=(600,960)
+WL-VIEWTREE]               #2 com.ss.android.article.base.ui.SSViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #3 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 1200x254 abs=[0,0][1200,254] c=(600,127)
+WL-VIEWTREE]                 #0 com.android.bytedance.homepage.searchbar.refactor.HomePageSearchBar vis=VISIBLE shown=true @0,0 1200x254 abs=[0,0][1200,254] c=(600,127)
+WL-VIEWTREE]                   #0 androidx.constraintlayout.widget.ConstraintLayout vis=VISIBLE shown=true @0,0 1200x254 abs=[0,0][1200,254] c=(600,127)
+WL-VIEWTREE]                     #0 com.android.bytedance.homepage.searchbar.refactor.view.TopBarBackgroundView vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                       #0 android.view.View vis=VISIBLE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                       #1 com.android.bytedance.homepage.searchbar.refactor.view.TopBarBackgroundImgView vis=INVISIBLE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                     #1 androidx.constraintlayout.widget.ConstraintLayout vis=VISIBLE shown=true @0,0 1200x254 abs=[0,0][1200,254] c=(600,127)
+WL-VIEWTREE]                       #0 android.view.View vis=VISIBLE shown=true @0,0 1200x172 abs=[0,0][1200,172] c=(600,86)
+WL-VIEWTREE]                       #1 android.view.View vis=INVISIBLE shown=false @0,0 1200x54 abs=[0,0][1200,54] c=(600,27)
+WL-VIEWTREE]                       #2 androidx.constraintlayout.widget.ConstraintLayout vis=VISIBLE shown=true @36,68 1128x90 abs=[36,68][1164,158] c=(600,113)
+WL-VIEWTREE]                         #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,45 0x0 abs=[36,113][36,113]
+WL-VIEWTREE]                         #1 android.view.View vis=VISIBLE shown=true @0,0 0x90 abs=[36,68][36,158]
+WL-VIEWTREE]                         #2 android.widget.LinearLayout vis=VISIBLE shown=true @962,2 166x86 abs=[998,70][1164,156] c=(1081,113)
+WL-VIEWTREE]                         #3 com.ss.android.common.ui.view.CropRelativeLayout vis=VISIBLE shown=true @0,0 962x90 abs=[36,68][998,158] c=(517,113) CLICKABLE
+WL-VIEWTREE]                         #4 android.widget.RelativeLayout vis=GONE shown=false @0,0 0x0 abs=[36,68][36,68]
+WL-VIEWTREE]                       #3 android.widget.FrameLayout vis=VISIBLE shown=true @0,172 1200x82 abs=[0,172][1200,254] c=(600,213)
+WL-VIEWTREE]                         #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 1200x82 abs=[0,172][1200,254] c=(600,213)
+WL-VIEWTREE]               #4 android.widget.FrameLayout vis=VISIBLE shown=true @0,1821 1200x99 abs=[0,1821][1200,1920] c=(600,1870)
+WL-VIEWTREE]                 #0 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 0x0 abs=[0,1821][0,1821]
+WL-VIEWTREE]                 #1 android.widget.TabWidget vis=VISIBLE shown=true @0,0 1200x99 abs=[0,1821][1200,1920] c=(600,1870)
+WL-VIEWTREE]                   #0 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @0,0 300x99 abs=[0,1821][300,1920] c=(150,1870) C
+WL-VIEWTREE]                     #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54 abs=[123,1828][177,1882] c=(150,1855)
+WL-VIEWTREE]                     #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54 abs=[123,1828][177,1882] c=(150,1855)
+WL-VIEWTREE]                     #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @130,61 40x29 abs=[130,1882][170,1911] c=(150,1896) text="头条"
+WL-VIEWTREE]                     #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99 abs=[0,1821][300,1920] c=(150,1870)
+WL-VIEWTREE]                     #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4 abs=[0,1826][4,1830] c=(2,1828)
+WL-VIEWTREE]                     #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18 abs=[-9,1829][9,1847] c=(0,1838)
+WL-VIEWTREE]                     #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94 abs=[0,1821][300,1915] c=(150,1868)
+WL-VIEWTREE]                     #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92 abs=[0,1824][300,1916] c=(150,1870)
+WL-VIEWTREE]                       #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63 abs=[116,1825][184,1888] c=(150,1856)
+WL-VIEWTREE]                       #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 abs=[150,1888][150,1916] text=""
+WL-VIEWTREE]                       #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92 abs=[0,1824][300,1916] c=(150,1870)
+WL-VIEWTREE]                   #1 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @300,0 300x99 abs=[300,1821][600,1920] c=(450,187
+WL-VIEWTREE]                     #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54 abs=[423,1828][477,1882] c=(450,1855)
+WL-VIEWTREE]                     #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54 abs=[423,1828][477,1882] c=(450,1855)
+WL-VIEWTREE]                     #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @130,61 40x29 abs=[430,1882][470,1911] c=(450,1896) text="视频"
+WL-VIEWTREE]                     #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99 abs=[300,1821][600,1920] c=(450,1870)
+WL-VIEWTREE]                     #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4 abs=[300,1826][304,1830] c=(302,1828)
+WL-VIEWTREE]                     #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18 abs=[291,1829][309,1847] c=(300,1838)
+WL-VIEWTREE]                     #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94 abs=[300,1821][600,1915] c=(450,1868)
+WL-VIEWTREE]                     #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92 abs=[300,1824][600,1916] c=(450,1870)
+WL-VIEWTREE]                       #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63 abs=[416,1825][484,1888] c=(450,1856)
+WL-VIEWTREE]                       #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 abs=[450,1888][450,1916] text=""
+WL-VIEWTREE]                       #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92 abs=[300,1824][600,1916] c=(450,1870)
+WL-VIEWTREE]                   #2 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @600,0 300x99 abs=[600,1821][900,1920] c=(750,187
+WL-VIEWTREE]                     #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54 abs=[723,1828][777,1882] c=(750,1855)
+WL-VIEWTREE]                     #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54 abs=[723,1828][777,1882] c=(750,1855)
+WL-VIEWTREE]                     #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @120,61 60x29 abs=[720,1882][780,1911] c=(750,1896) text="放映厅"
+WL-VIEWTREE]                     #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99 abs=[600,1821][900,1920] c=(750,1870)
+WL-VIEWTREE]                     #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4 abs=[600,1826][604,1830] c=(602,1828)
+WL-VIEWTREE]                     #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18 abs=[591,1829][609,1847] c=(600,1838)
+WL-VIEWTREE]                     #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94 abs=[600,1821][900,1915] c=(750,1868)
+WL-VIEWTREE]                     #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92 abs=[600,1824][900,1916] c=(750,1870)
+WL-VIEWTREE]                       #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63 abs=[716,1825][784,1888] c=(750,1856)
+WL-VIEWTREE]                       #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 abs=[750,1888][750,1916] text=""
+WL-VIEWTREE]                       #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92 abs=[600,1824][900,1916] c=(750,1870)
+WL-VIEWTREE]                   #3 com.ss.android.article.base.feature.main.presenter.interactors.tabs.indicator.MainTabIndicator vis=VISIBLE shown=true @900,0 300x99 abs=[900,1821][1200,1920] c=(1050,1
+WL-VIEWTREE]                     #0 androidx.appcompat.widget.AppCompatImageView vis=INVISIBLE shown=false @123,7 54x54 abs=[1023,1828][1077,1882] c=(1050,1855)
+WL-VIEWTREE]                     #1 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @123,7 54x54 abs=[1023,1828][1077,1882] c=(1050,1855)
+WL-VIEWTREE]                     #2 com.bytedance.services.font.FontTextView vis=VISIBLE shown=true @120,61 60x29 abs=[1020,1882][1080,1911] c=(1050,1896) text="未登录"
+WL-VIEWTREE]                     #3 com.airbnb.lottie.LottieAnimationView vis=VISIBLE shown=true @0,0 300x99 abs=[900,1821][1200,1920] c=(1050,1870)
+WL-VIEWTREE]                     #4 com.ss.android.article.base.feature.main.MainTabTagView vis=INVISIBLE shown=false @0,5 4x4 abs=[900,1826][904,1830] c=(902,1828)
+WL-VIEWTREE]                     #5 android.view.View vis=INVISIBLE shown=false @-9,8 18x18 abs=[891,1829][909,1847] c=(900,1838)
+WL-VIEWTREE]                     #6 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x94 abs=[900,1821][1200,1915] c=(1050,1868)
+WL-VIEWTREE]                     #7 android.widget.RelativeLayout vis=VISIBLE shown=true @0,3 300x92 abs=[900,1824][1200,1916] c=(1050,1870)
+WL-VIEWTREE]                       #0 android.widget.FrameLayout vis=VISIBLE shown=true @116,1 68x63 abs=[1016,1825][1084,1888] c=(1050,1856)
+WL-VIEWTREE]                       #1 android.widget.TextView vis=VISIBLE shown=true @150,64 0x28 abs=[1050,1888][1050,1916] text=""
+WL-VIEWTREE]                       #2 android.widget.FrameLayout vis=VISIBLE shown=true @0,0 300x92 abs=[900,1824][1200,1916] c=(1050,1870)
+WL-VIEWTREE]               #5 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #6 android.widget.RelativeLayout vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #0 android.widget.RelativeLayout vis=VISIBLE shown=false @0,0 0x0 abs=[0,0][0,0] CLICKABLE
+WL-VIEWTREE]                   #0 androidx.appcompat.widget.AppCompatImageView vis=VISIBLE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]                 #1 com.ss.android.image.AsyncImageView vis=VISIBLE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #7 android.widget.FrameLayout vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #8 android.widget.FrameLayout vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #9 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #10 android.view.ViewStub vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]               #11 android.view.SurfaceView vis=GONE shown=false @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE] --- window[1] params=w=0 h=-1 type=1000 flags=0x41820008 title={(0,0)(0xfill) gr=TOP START CENTER sim={state=always_visible adjust=resize} ty=APPLICATION_PANEL fmt=TRANSPARENT surfaceInset
+WL-VIEWTREE] #0 android.widget.PopupWindow$PopupDecorView vis=VISIBLE shown=true @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]   #0 android.widget.PopupWindow$PopupBackgroundView vis=VISIBLE shown=true @0,0 0x0 abs=[0,0][0,0]
+WL-VIEWTREE]     #0 android.widget.LinearLayout vis=VISIBLE shown=true @0,0 0x0 abs=[0,0][0,0]

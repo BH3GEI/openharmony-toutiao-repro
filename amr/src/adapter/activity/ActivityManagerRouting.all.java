@@ -1232,6 +1232,18 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             int left = (Integer) viewCls.getMethod("getLeft").invoke(v);
             int top = (Integer) viewCls.getMethod("getTop").invoke(v);
             boolean shown = (Boolean) viewCls.getMethod("isShown").invoke(v);
+            // Relative left/top is not enough to aim a tap: Gravity and margins
+            // inside SSTabHost leave most children reporting (0,0) even though
+            // they render at the bottom of the screen.  getLocationOnScreen is
+            // unambiguous, so print the absolute rect and its centre too.
+            int[] loc = new int[] { -1, -1 };
+            try {
+                viewCls.getMethod("getLocationOnScreen", int[].class).invoke(v, (Object) loc);
+            } catch (Throwable ignore) { }
+            boolean clickable = false;
+            try {
+                clickable = (Boolean) viewCls.getMethod("isClickable").invoke(v);
+            } catch (Throwable ignore) { }
             String text = "";
             try {
                 Class<?> tv = Class.forName("android.widget.TextView");
@@ -1252,7 +1264,14 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
               .append(" shown=").append(shown)
               .append(" @").append(left).append(',').append(top)
               .append(' ').append(w).append('x').append(h)
-              .append(text);
+              .append(" abs=[").append(loc[0]).append(',').append(loc[1])
+              .append("][").append(loc[0] + w).append(',').append(loc[1] + h).append(']');
+            if (w > 0 && h > 0) {
+                sb.append(" c=(").append(loc[0] + w / 2).append(',')
+                  .append(loc[1] + h / 2).append(')');
+            }
+            if (clickable) sb.append(" CLICKABLE");
+            sb.append(text);
             System.err.println(sb.toString());
 
             Class<?> vg = Class.forName("android.view.ViewGroup");
