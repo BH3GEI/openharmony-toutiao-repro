@@ -169,6 +169,7 @@ shims/conscrypt/           空 SSLParametersImpl 源码
 scripts/                   deploy_and_run / run_capture / keepawake / grant_internet / fetch_prebuilts
 frames/mainactivity/       首帧截图 + 120 行真实控件树
 docs/ROOT-CAUSES.md        全部根因的完整技术记录
+docs/NETWORK_STACK_ANALYSIS.md  网络栈静态分析：TTNet/OkHttp/Cronet 三条路径与 TLS 打通靶标
 docs/WORKLOG.md            攻坚过程流水（含被证伪的路线，避免重走）
 ```
 
@@ -200,6 +201,8 @@ docs/WORKLOG.md            攻坚过程流水（含被证伪的路线，避免�
 ## 6. 仍未解决
 
 1. **适配层没有 TLS** → 信息流永远为空。这是唯一挡在「有内容的主界面」前面的东西。
+   下一步的靶标分析见 [`docs/NETWORK_STACK_ANALYSIS.md`](docs/NETWORK_STACK_ANALYSIS.md)：
+   App 自带 `libsscronet.so` + `libttboringssl.so`，走通 Cronet 比移植 conscrypt 短得多。
 2. **PopupWindow 拿不到真正的 OH scene session** —— 现在是被**静默**掉的，
    弹窗不可见也点不到。要真正可用，需要适配层给子窗口分配 session。
 3. **JIT 不可用**（`JitCompiler::ParseCompilerOptions` 空指针），只能解释执行，
