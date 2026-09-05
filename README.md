@@ -99,8 +99,13 @@ subWindowType(window, attrs):
 | 2 | 顶部 9 个频道 Tab<br>关注/推荐/热榜/本地/视频/畅听/问答/娱乐/科技 | `uinput -T -c <x> 213` | ❌ **点击无响应** | 同上一张：点完「科技」后仍停在「推荐」（红下划线未移动） |
 | 3 | 底部 4 个导航<br>头条/视频/放映厅/未登录 | `uinput -T -c <x> 1855` | ❌ **点击无响应** | ![](frames/screens/02-after-tap-bottom-nav-mine.jpeg) 点完「未登录」后仍高亮「头条」 |
 | 4 | 顶部搜索框 | `uinput -T -c 400 112` | ❌ **点击无响应** | ![](frames/screens/03-after-tap-search-box.jpeg) |
-| 5 | `SearchActivity` | `aa start` | ⚠️ **能拉起、未上屏** | ![](frames/screens/04-aa-start-SearchActivity.jpeg) 白屏 |
-| 6 | `NewDetailActivity` | `aa start` | ⚠️ **能拉起、未上屏** | ![](frames/screens/05-aa-start-NewDetailActivity.jpeg) 白屏 |
+| 5 | `SearchActivity` | `aa start` | ❌ **启动即崩**（此前误记为"能拉起、未上屏"）| ![](frames/screens/04-aa-start-SearchActivity.jpeg) 白屏 |
+| 6 | `NewDetailActivity` | `aa start` | ❌ 同上 | ![](frames/screens/05-aa-start-NewDetailActivity.jpeg) 白屏 |
+
+> **更正**：第 5、6 项不是"渲染不出来"，是 `performLaunchActivity` 当场抛
+> `IllegalStateException: You need to use a Theme.AppCompat theme`、**进程直接死**。
+> 根因是 `ActivityInfo.theme` 恒为 0（适配层的 manifest parser 不带 theme），
+> 详见 [`docs/INPUT_PATH_ANALYSIS.md`](docs/INPUT_PATH_ANALYSIS.md) 第 10 节。
 
 ### 为什么交互采样全部失败
 

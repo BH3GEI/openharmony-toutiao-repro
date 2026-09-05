@@ -2290,19 +2290,291 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
     }
 
     /** ComponentInfo.processName defaults to the application's process on a device. */
+    private static volatile boolean sThemeFixReported;
+    private static volatile boolean sThemeMissReported;
+
+    /**
+     * ActivityInfo.theme.
+     *
+     * The adapter's manifest parser does not carry the manifest's theme across,
+     * so ActivityInfo arrives with theme == 0.  ActivityThread then resolves a
+     * bare framework theme and every AppCompatActivity dies on setContentView:
+     *
+     *   RuntimeException: Unable to start activity …SearchActivity:
+     *   RuntimeException: themeId:0xnull themeResources:0x103013f
+     *   Caused by: IllegalStateException: You need to use a Theme.AppCompat
+     *              theme (or descendant) with this activity.
+     *
+     * This is what "aa start renders white" actually was: the process does not
+     * render the new activity, it *dies* launching it.
+     *
+     * AOSP's own rule when an <activity> declares no theme is to fall back to
+     * the <application> theme, so do exactly that.
+     */
+    private static int fixTheme(Object component) {
+        Field themeF = findField(component.getClass(), "theme");
+        if (themeF == null) {
+            return 0;
+        }
+        try {
+            themeF.setAccessible(true);
+            if (themeF.getInt(component) != 0) {
+                return 0;
+            }
+            Object appInfo = readField(component, "applicationInfo");
+            Object v = (appInfo == null) ? null : readFieldValue(appInfo, "theme");
+            int appTheme = (v instanceof Integer) ? ((Integer) v).intValue() : 0;
+            if (appTheme == 0) {
+                // Nothing to inherit -- ApplicationInfo.theme is 0 too.  Read the
+                // real value straight out of the apk's manifest instead; failing
+                // that, any Theme.AppCompat descendant at least satisfies
+                // AppCompatDelegate.
+                appTheme = manifestTheme(component, appInfo);
+            }
+            if (appTheme == 0) {
+                appTheme = fallbackAppCompatTheme();
+            }
+            if (appTheme == 0) {
+                if (!sThemeMissReported) {
+                    sThemeMissReported = true;
+                    System.err.println("[WL-AMR] theme back-fill unavailable:"
+                            + " ActivityInfo.theme==0, ApplicationInfo.theme==0 and no"
+                            + " Theme.AppCompat.* in the app's resources ("
+                            + readFieldValue(component, "name") + ")");
+                }
+                return 0;
+            }
+            themeF.setInt(component, appTheme);
+            if (!sThemeFixReported) {
+                sThemeFixReported = true;
+                System.err.println("[WL-AMR] ActivityInfo.theme back-filled from"
+                        + " ApplicationInfo.theme=0x" + Integer.toHexString(appTheme));
+            }
+            return 1;
+        } catch (Throwable ignored) {
+            return 0;
+        }
+    }
+
+    /* ------------------------------------------------------------------
+     * Manifest themes
+     *
+     * The adapter's manifest parser does not carry android:theme across, so
+     * every ActivityInfo arrives with theme == 0 -- and so does ApplicationInfo.
+     * ActivityThread then resolves a bare framework theme, and every
+     * AppCompatActivity dies in setContentView:
+     *
+     *   RuntimeException: Unable to start activity …SearchActivity:
+     *   RuntimeException: themeId:0xnull themeResources:0x103013f
+     *   Caused by: IllegalStateException: You need to use a Theme.AppCompat
+     *              theme (or descendant) with this activity.
+     *
+     * That is what "aa start renders a white screen" actually was: the process
+     * does not fail to draw the new activity, it *dies* launching it.
+     *
+     * The information is right there in the apk -- in this one, 781 of 968
+     * activities declare a theme -- so read AndroidManifest.xml ourselves.  It
+     * is binary AXML, but only three things are needed: the string pool, the
+     * resource-id map (framework attributes carry no name, only an id), and the
+     * android:name / android:theme attributes of each <activity>.
+     * ------------------------------------------------------------------ */
+
+    private static final int ATTR_THEME = 0x01010000;
+    private static final int ATTR_NAME  = 0x01010003;
+
+    private static volatile Map<String, Integer> sManifestThemes;
+    private static volatile int sManifestAppTheme;
+    private static volatile boolean sManifestTried;
+
+    private static void loadManifestThemes(Object appInfo) {
+        if (sManifestTried) return;
+        sManifestTried = true;
+        String apk = null;
+        if (appInfo != null) {
+            Object v = readFieldValue(appInfo, "sourceDir");
+            if (v instanceof String) apk = (String) v;
+            if (apk == null) {
+                v = readFieldValue(appInfo, "publicSourceDir");
+                if (v instanceof String) apk = (String) v;
+            }
+        }
+        if (apk == null) {
+            apk = "/data/app/el1/bundle/public/com.ss.android.article.news/android/base.apk";
+        }
+        java.util.zip.ZipFile zf = null;
+        try {
+            zf = new java.util.zip.ZipFile(apk);
+            java.util.zip.ZipEntry e = zf.getEntry("AndroidManifest.xml");
+            if (e == null) {
+                System.err.println("[WL-THEME] no AndroidManifest.xml in " + apk);
+                return;
+            }
+            java.io.InputStream in = zf.getInputStream(e);
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            for (int n = in.read(buf); n > 0; n = in.read(buf)) bos.write(buf, 0, n);
+            in.close();
+            Map<String, Integer> map = parseAxmlThemes(bos.toByteArray());
+            sManifestThemes = map;
+            System.err.println("[WL-THEME] parsed " + apk + ": " + map.size()
+                    + " activity themes, application theme=0x"
+                    + Integer.toHexString(sManifestAppTheme));
+        } catch (Throwable t) {
+            System.err.println("[WL-THEME] manifest parse failed: " + t);
+        } finally {
+            if (zf != null) { try { zf.close(); } catch (Throwable ignored) {} }
+        }
+    }
+
+    private static int u16(byte[] b, int o) {
+        return (b[o] & 0xff) | ((b[o + 1] & 0xff) << 8);
+    }
+
+    private static int u32(byte[] b, int o) {
+        return (b[o] & 0xff) | ((b[o + 1] & 0xff) << 8)
+             | ((b[o + 2] & 0xff) << 16) | ((b[o + 3] & 0xff) << 24);
+    }
+
+    private static Map<String, Integer> parseAxmlThemes(byte[] b) throws Exception {
+        Map<String, Integer> out = new java.util.HashMap<String, Integer>();
+        List<String> pool = new ArrayList<String>();
+        int[] resMap = new int[0];
+        int p = 8;
+        while (p + 8 <= b.length) {
+            int ctype = u16(b, p);
+            int hsize = u16(b, p + 2);
+            int csize = u32(b, p + 4);
+            if (csize <= 0 || p + csize > b.length) break;
+
+            if (ctype == 0x0001) {                       // RES_STRING_POOL_TYPE
+                int cnt = u32(b, p + 8);
+                int flags = u32(b, p + 16);
+                int strStart = p + u32(b, p + 20);
+                boolean utf8 = (flags & 0x100) != 0;
+                for (int i = 0; i < cnt; i++) {
+                    int q = strStart + u32(b, p + hsize + 4 * i);
+                    if (q < 0 || q >= b.length) { pool.add(""); continue; }
+                    if (utf8) {
+                        int n = b[q] & 0xff;               // char count
+                        q += ((n & 0x80) != 0) ? 2 : 1;
+                        int m = b[q] & 0xff;               // byte count
+                        if ((m & 0x80) != 0) { m = ((m & 0x7f) << 8) | (b[q + 1] & 0xff); q += 2; }
+                        else q += 1;
+                        pool.add(new String(b, q, Math.min(m, b.length - q), "UTF-8"));
+                    } else {
+                        int n = u16(b, q);
+                        q += 2;
+                        pool.add(new String(b, q, Math.min(n * 2, b.length - q), "UTF-16LE"));
+                    }
+                }
+            } else if (ctype == 0x0180) {                // RES_XML_RESOURCE_MAP_TYPE
+                int n = (csize - hsize) / 4;
+                resMap = new int[n];
+                for (int i = 0; i < n; i++) resMap[i] = u32(b, p + hsize + 4 * i);
+            } else if (ctype == 0x0102) {                // RES_XML_START_ELEMENT_TYPE
+                int nameIdx = u32(b, p + 20);
+                String tag = (nameIdx >= 0 && nameIdx < pool.size()) ? pool.get(nameIdx) : "";
+                boolean isActivity = "activity".equals(tag) || "activity-alias".equals(tag);
+                if (isActivity || "application".equals(tag)) {
+                    // attributeStart is relative to the attrExt struct, which
+                    // begins right after the 16-byte node header.
+                    int aStart = p + 16 + u16(b, p + 24);
+                    int aCount = u16(b, p + 28);
+                    String name = null;
+                    int theme = 0;
+                    for (int i = 0; i < aCount; i++) {
+                        int a = aStart + i * 20;
+                        if (a + 20 > b.length) break;
+                        int nIdx = u32(b, a + 4);
+                        int res = (nIdx >= 0 && nIdx < resMap.length) ? resMap[nIdx] : 0;
+                        int dtype = b[a + 15] & 0xff;
+                        int data = u32(b, a + 16);
+                        if (res == ATTR_THEME) {
+                            theme = data;
+                        } else if (res == ATTR_NAME && dtype == 0x03
+                                && data >= 0 && data < pool.size()) {
+                            name = pool.get(data);
+                        }
+                    }
+                    if (isActivity) {
+                        if (name != null && theme != 0) out.put(name, Integer.valueOf(theme));
+                    } else if (theme != 0) {
+                        sManifestAppTheme = theme;
+                    }
+                }
+            }
+            p += csize;
+        }
+        return out;
+    }
+
+    private static int manifestTheme(Object component, Object appInfo) {
+        loadManifestThemes(appInfo);
+        Map<String, Integer> map = sManifestThemes;
+        if (map != null) {
+            Object n = readFieldValue(component, "name");
+            if (n instanceof String) {
+                Integer t = map.get((String) n);
+                if (t != null) return t.intValue();
+            }
+        }
+        return sManifestAppTheme;
+    }
+
+    private static final String[] APPCOMPAT_THEMES = {
+        "Theme.AppCompat.Light.NoActionBar",
+        "Theme.AppCompat.Light",
+        "Theme.AppCompat.NoActionBar",
+        "Theme.AppCompat",
+    };
+
+    /** 0 until the Application exists; only a successful lookup is cached. */
+    private static volatile int sFallbackTheme;
+
+    private static int fallbackAppCompatTheme() {
+        int cached = sFallbackTheme;
+        if (cached != 0) {
+            return cached;
+        }
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            if (app == null) {
+                return 0;
+            }
+            Object res = app.getClass().getMethod("getResources").invoke(app);
+            String pkg = (String) app.getClass().getMethod("getPackageName").invoke(app);
+            Method gi = res.getClass().getMethod("getIdentifier",
+                    String.class, String.class, String.class);
+            for (int i = 0; i < APPCOMPAT_THEMES.length; i++) {
+                Object id = gi.invoke(res, APPCOMPAT_THEMES[i], "style", pkg);
+                if (id instanceof Integer && ((Integer) id).intValue() != 0) {
+                    int v = ((Integer) id).intValue();
+                    sFallbackTheme = v;
+                    System.err.println("[WL-AMR] theme fallback resolved "
+                            + APPCOMPAT_THEMES[i] + " = 0x" + Integer.toHexString(v));
+                    return v;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return 0;
+    }
+
     private static int fixComponent(Object component) {
         if (component == null) {
             return 0;
         }
+        int fixed = fixTheme(component);
         Field processName = findField(component.getClass(), "processName");
         if (processName == null) {
-            return 0;
+            return fixed;
         }
         try {
             processName.setAccessible(true);
             Object cur = processName.get(component);
             if (cur instanceof String && ((String) cur).length() > 0) {
-                return 0;
+                return fixed;
             }
             String replacement = null;
             Object appInfo = readField(component, "applicationInfo");
@@ -2332,11 +2604,11 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             }
             if (replacement != null) {
                 processName.set(component, replacement);
-                return 1;
+                return fixed + 1;
             }
         } catch (Throwable ignored) {
         }
-        return 0;
+        return fixed;
     }
 
     private static String sProcessName;

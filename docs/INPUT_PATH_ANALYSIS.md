@@ -495,3 +495,74 @@ PopupWindow 埋的，它的 LayoutParams 是 `w=0 h=-1`——**完全没有面�
   事件送达主窗口，但此后**什么都没有**：没有窗口、没有网络、没有异常。
   等 150 秒也没有（排除了"新 Activity 解释器冷渲染太慢"这个解释）。
   处理函数看来根本没跑到 `startActivity`。**这一条尚未定位，不下结论。**
+
+
+---
+
+## 10. 「新 Activity 白屏」的真相：不是没渲染，是**启动时崩了**
+
+用 `[WL-WIN]` 探针跟一次 `aa start com.android.bytedance.search.SearchActivity`
+（注意包名——`com.ss.android.article.news.activity.SearchActivity` 并不存在，
+真正的是 `com.android.bytedance.search.SearchActivity`，`bm dump` 里 968 个 ability 可查）：
+
+```
+start ability successfully.
+t=20s size=81193  wlwin=0  alive=0      ← 进程没了
+```
+
+`wlwin=0`：**从来没有过 `addToDisplay`**。进程在建窗口之前就死了。日志里：
+
+```
+[CHILD_CK] J_invokeStaticMain_main_threw: java.lang.RuntimeException:
+  Unable to start activity ComponentInfo{…/com.android.bytedance.search.SearchActivity}:
+  java.lang.RuntimeException: themeId:0xnull themeResources:0x103013f
+  at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:3799)
+Caused by: java.lang.IllegalStateException:
+  You need to use a Theme.AppCompat theme (or descendant) with this activity.
+  at androidx.appcompat.app.AppCompatDelegateImpl.setContentView
+  at com.bytedance.android.gaia.activity.BaseActivity.onCreate
+  at com.android.bytedance.search.SearchActivity.onCreate
+```
+
+**所以"能拉起、未上屏"这个描述是错的**（本仓 README 之前就是这么写的，现已更正）：
+它不是渲染不出来，是 **`performLaunchActivity` 里当场抛异常、进程直接死**。
+
+### 根因：`ActivityInfo.theme` 恒为 0
+
+加了 back-fill 探针后板上打出：
+
+```
+[WL-AMR] theme back-fill unavailable:
+         ActivityInfo.theme==0 and ApplicationInfo.theme==0
+```
+
+两者都是 0——适配层的 manifest parser **一个 theme 都没带过来**，
+所以 AOSP 的"继承 application 主题"这条兜底也没得可继承。
+
+### 但 apk 里的数据是全的
+
+自己解析 `AndroidManifest.xml`（AXML）核对，数据一条不缺：
+
+| 项 | 值 |
+|---|---|
+| `<application android:theme>` | **`0x7f090002`** |
+| 声明了 `android:theme` 的 activity | **781 / 968** |
+| `com.ss.android.article.news.activity.MainActivity` | `0x7f0903d7` |
+| `com.android.bytedance.search.SearchActivity` | `0x7f0903d1` |
+| `com.ss.android.article.news.activity.SplashActivity` | `0x7f0903e5` |
+
+> **AXML 解析有个容易踩的坑**：`START_TAG` 里的 `attributeStart` 是相对
+> **attrExt 结构体**（节点头之后的第 16 字节）的偏移，不是相对 chunk 起点。
+> 按 chunk 起点算会得到一堆恒定的垃圾值（我第一版就是这样，21 个属性全读成
+> `data=0x000007d0`）。另外框架属性在字符串池里**没有名字**，只能靠
+> `RESOURCE_MAP` 的 id 认（`android:theme=0x01010000`、`android:name=0x01010003`）。
+
+### 已实现：`ActivityManagerRouting` 内置 AXML 主题解析
+
+`loadManifestThemes()` 打开 app 自己的 apk 读 `AndroidManifest.xml`，
+建立 `activity 全名 → theme id` 映射（`<application>` 的作为兜底），
+在 `fixComponent` 里回填 `ActivityInfo.theme`。约 150 行，不依赖任何外部工具，
+对任何 apk 通用。再兜一层 `Theme.AppCompat.*` 按名解析（本 app 里查不到，
+说明它的 appcompat 资源名被改过，所以 manifest 这条路是必需的）。
+
+**尚未在真机验证**：板端在此时被并行任务接管（见下），我停手了。
