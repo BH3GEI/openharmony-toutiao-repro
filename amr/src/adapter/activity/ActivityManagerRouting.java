@@ -1060,6 +1060,15 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             Object windowArg = (args != null && args.length > 0) ? args[0] : null;
             Object attrsArg = (args != null && args.length > 1) ? args[1] : null;
 
+            // Every window a Dialog, PopupWindow or new Activity puts on screen
+            // has to come through here, so this one line answers "did the click
+            // even try to open something?".  addToDisplay/remove are rare;
+            // relayout is not, so it stays out of the log.
+            if (mName.startsWith("addToDisplay") || "remove".equals(mName)) {
+                System.err.println("[WL-WIN] " + mName + " attrs=" + describeLp(attrsArg));
+            }
+            noteDegenerate(windowArg, attrsArg);
+
             if (args != null) {
                 for (int i = 0; i < args.length; i++) {
                     maskFlags(args[i], mName);
@@ -1068,7 +1077,9 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 }
             }
 
-            neutralizeSubWindow(windowArg, attrsArg, mName);
+            if (shouldNeutralize(windowArg, attrsArg)) {
+                neutralizeSubWindow(windowArg, attrsArg, mName);
+            }
 
             Object result;
             try {
@@ -1079,7 +1090,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
 
             if ("relayout".equals(mName) && result instanceof Integer) {
                 int ty = subWindowType(windowArg, attrsArg);
-                if (ty >= FIRST_SUB_WINDOW) {
+                if (ty >= FIRST_SUB_WINDOW && shouldNeutralize(windowArg, attrsArg)) {
                     int original = (Integer) result;
                     result = Integer.valueOf(0);
                     System.err.println("[WL-AMR] relayout: sub-window type=" + ty
@@ -1098,7 +1109,9 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 }
             }
 
-            invalidateSubWindowSurface(windowArg, attrsArg, mName);
+            if (shouldNeutralize(windowArg, attrsArg)) {
+                invalidateSubWindowSurface(windowArg, attrsArg, mName);
+            }
 
             return result;
         }
@@ -1310,11 +1323,72 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
          * type, so every later call is recognised regardless of attrs.  Weak keys so a
          * dismissed popup does not pin its ViewRootImpl.
          */
-        private static final Set<Object> sSubWindows =
+        /**
+     * Sub-windows whose LayoutParams were degenerate (width or height exactly 0).
+     *
+     * Only these get neutralised.  The EGL_NO_SURFACE / "Surface was not locked"
+     * mine that cost us the first frame was laid by one specific PopupWindow that
+     * came in as `w=0 h=-1` -- a window with no area at all.  Blanking *every*
+     * sub-window was the sledgehammer version of that fix, and it also swallowed
+     * the login dialog and anything else with a real size.
+     *
+     * MATCH_PARENT (-1) and WRAP_CONTENT (-2) are real sizes; only an exact 0 is
+     * degenerate.  Set the file /data/local/tmp/wl_neutralize_all to fall back to
+     * blanking every sub-window if this turns out to reopen the first-frame hole.
+     */
+    private static final Set<Object> sDegenerateSubWindows =
+            Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<Object, Boolean>()));
+
+    private static final String NEUTRALIZE_ALL_FILE = "/data/local/tmp/wl_neutralize_all";
+
+    private static boolean neutralizeEverySubWindow() {
+        return new File(NEUTRALIZE_ALL_FILE).exists();
+    }
+
+    private static final Set<Object> sSubWindows =
                 Collections.synchronizedSet(
                         Collections.newSetFromMap(new WeakHashMap<Object, Boolean>()));
 
         /** Sub-window type for this call, or -1.  Registers on first identification. */
+        /**
+         * Remember whether this sub-window has any area.  LayoutParams only
+         * arrive when they change (relayoutWindow passes null otherwise), so the
+         * verdict has to be remembered per window, exactly like sSubWindows.
+         */
+        private static void noteDegenerate(Object window, Object layoutParams) {
+            if (window == null || layoutParams == null) return;
+            if (getLayoutParamsType(layoutParams) < FIRST_SUB_WINDOW) return;
+            try {
+                Class<?> c = layoutParams.getClass();
+                Field wf = findField(c, "width");
+                Field hf = findField(c, "height");
+                if (wf == null || hf == null) return;
+                wf.setAccessible(true);
+                hf.setAccessible(true);
+                int w = wf.getInt(layoutParams);
+                int h = hf.getInt(layoutParams);
+                // -1 MATCH_PARENT and -2 WRAP_CONTENT are real sizes; only an
+                // exact 0 means the window can never have a drawable surface.
+                boolean degenerate = (w == 0 || h == 0);
+                if (degenerate) {
+                    if (sDegenerateSubWindows.add(window)) {
+                        System.err.println("[WL-WIN] sub-window w=" + w + " h=" + h
+                                + " is degenerate -> will be neutralised");
+                    }
+                } else if (sDegenerateSubWindows.remove(window)) {
+                    System.err.println("[WL-WIN] sub-window resized to w=" + w + " h=" + h
+                            + " -> neutralisation lifted");
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
+        private static boolean shouldNeutralize(Object window, Object layoutParams) {
+            if (subWindowType(window, layoutParams) < FIRST_SUB_WINDOW) return false;
+            if (neutralizeEverySubWindow()) return true;
+            return window != null && sDegenerateSubWindows.contains(window);
+        }
+
         private static int subWindowType(Object window, Object layoutParams) {
             int ty = getLayoutParamsType(layoutParams);
             if (ty >= FIRST_SUB_WINDOW) {

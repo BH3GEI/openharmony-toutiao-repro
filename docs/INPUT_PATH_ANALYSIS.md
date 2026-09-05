@@ -447,3 +447,51 @@ nativeGetVelocity(JII)F     nativeIsAxisSupported(I)Z
 "汽车/财经/军事"露了出来），这本身就是 `HorizontalScrollView` 恢复工作的直接证据。
 
 信息流仍然是空的——那是 TTNet 自取消的问题（S2 在查），与输入无关。
+
+
+---
+
+## 9. 子窗口中和的精细化，以及「未登录 / 搜索框」的真相
+
+### 9.1 中和范围收窄：只中和**零面积**子窗口
+
+首帧那颗 `EGL_NO_SURFACE` / `Surface was not locked` 的雷，是**一个特定的**
+PopupWindow 埋的，它的 LayoutParams 是 `w=0 h=-1`——**完全没有面积**。
+但当时的修复是把 `type >= 1000` 的子窗口**全部**静默掉，这是大锤版本。
+
+现在按尺寸判定：`MATCH_PARENT(-1)` 和 `WRAP_CONTENT(-2)` 都是**真实尺寸**，
+只有**恰好为 0** 才算退化。只有退化窗口进 `sDegenerateSubWindows`，也只有它被中和。
+`LayoutParams` 只在变化时才下发（其余传 null），所以和 `sSubWindows` 一样按窗口记忆。
+
+留了一个回退开关：`touch /data/local/tmp/wl_neutralize_all` 恢复全域中和。
+
+**真机验证无回归**：冷启动照常在 t=80s 出首帧，启动期日志显示只有一个子窗口，
+正是那个退化的：
+
+```
+[WL-WIN] addToDisplayAsUser attrs=w=-1 h=-1 type=1    … ty=BASE_APPLICATION
+[WL-WIN] addToDisplayAsUser attrs=w=0  h=-1 type=1000 … ty=APPLICATION_PANEL
+[WL-WIN] sub-window w=0 h=-1 is degenerate -> will be neutralised
+```
+
+### 9.2 但它不是「未登录 / 搜索框」的拦路虎
+
+新增的 `[WL-WIN]` 一行日志覆盖 `addToDisplay*` / `remove`——
+任何 Dialog、PopupWindow 或新 Activity 要上屏都**必须**经过这里。结果：
+
+| 点击 | 新窗口 | 网络 | 界面 |
+|---|---|---|---|
+| 未登录（1050,1870）| **0 条** `addToDisplay` | **真实 HTTPS/H2 到 `api.toutiaoapi.com:443`** | 不切换 |
+| 搜索框（517,113）| **0 条**，等到 **150 秒**仍为 0 | 无 | 不切换 |
+
+所以**没有任何窗口被创建**，中和根本没有东西可吞——放宽中和不会让它们出现。
+两者的原因还不一样：
+
+- **未登录**：点击**确实被处理了**。日志里出现
+  `[WL-TLS] tap createSocket api.toutiaoapi.com` 以及 h2 帧的收发，
+  说明处理函数跑起来并发了真实请求。Tab 不切换，更像是**切换本身依赖这个请求的结果**——
+  和信息流为空是同一个内容层问题，不是输入问题。
+- **搜索框**：坐标落在 `CropRelativeLayout abs=[36,68][998,158] CLICKABLE` 正中，
+  事件送达主窗口，但此后**什么都没有**：没有窗口、没有网络、没有异常。
+  等 150 秒也没有（排除了"新 Activity 解释器冷渲染太慢"这个解释）。
+  处理函数看来根本没跑到 `startActivity`。**这一条尚未定位，不下结论。**
