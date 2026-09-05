@@ -86,7 +86,56 @@ subWindowType(window, attrs):
 
 ---
 
-## 3. 快速验证（用 Release 预编译产物）
+---
+
+## 3. 真实真机界面验收矩阵
+
+板端 1200x1920，`base.final7.apk` + TLS 桥接，2026-09-05 实测采样。
+**如实记录**：只有首页是真正验收通过的，交互类采样全部失败，原因见下。
+
+| # | 界面 | 采样方式 | 结果 | 凭据 |
+|---|---|---|---|---|
+| 1 | 首页 · 推荐 Feed | 冷启动 `aa start MainActivity` | ✅ **真实渲染** | ![](frames/screens/01-home-feed-recommend.jpeg) |
+| 2 | 顶部 9 个频道 Tab<br>关注/推荐/热榜/本地/视频/畅听/问答/娱乐/科技 | `uinput -T -c <x> 213` | ❌ **点击无响应** | 同上一张：点完「科技」后仍停在「推荐」（红下划线未移动） |
+| 3 | 底部 4 个导航<br>头条/视频/放映厅/未登录 | `uinput -T -c <x> 1855` | ❌ **点击无响应** | ![](frames/screens/02-after-tap-bottom-nav-mine.jpeg) 点完「未登录」后仍高亮「头条」 |
+| 4 | 顶部搜索框 | `uinput -T -c 400 112` | ❌ **点击无响应** | ![](frames/screens/03-after-tap-search-box.jpeg) |
+| 5 | `SearchActivity` | `aa start` | ⚠️ **能拉起、未上屏** | ![](frames/screens/04-aa-start-SearchActivity.jpeg) 白屏 |
+| 6 | `NewDetailActivity` | `aa start` | ⚠️ **能拉起、未上屏** | ![](frames/screens/05-aa-start-NewDetailActivity.jpeg) 白屏 |
+
+### 为什么交互采样全部失败
+
+**触控事件根本没有送达 App。** 逐像素比对证实：点击底部导航/搜索框后的帧，
+与基线在状态栏以下只有 **7563 / 2136000 ≈ 0.35%** 的像素差异，
+且集中在时钟与「视频」进度条动画上——**没有任何界面切换**。
+
+适配层**创建了**输入通道：
+
+```
+[OH_WSA] step3a createInputChannelPair OK
+[OH_WSA] step3b InputChannel.copyTo OK
+```
+
+但 OH 的 multimodal input 从未把 pointer 事件投递进去。这与之前定位的
+PopupWindow「无 surface、无输入」是同一类问题（见 `docs/ROOT-CAUSES.md` 第 10 项），
+只是范围更大：**主窗口同样收不到输入**。
+
+> 这也修正了此前的一个推断：先前认为隐私弹窗是被我们点掉的。既然触控从未送达，
+> 该弹窗更可能是被 `PrivateApiLancetImpl.<clinit>` 或其它补丁改变了触发条件，
+> **不是**被点击接受的。
+
+### `aa start` 能拉起但不上屏
+
+`aa start` 对 972 个已声明 ability 有效（`start ability successfully`），
+但每个新 Activity 都要重付一次**解释器冷渲染成本**——主界面首帧本身就要 80–110 s，
+采样时给的 6 s 远远不够。要采到这些页面，需要每个 Activity 单独等 2 分钟。
+
+### 结论
+
+**界面矩阵无法通过交互采样完成**，除非先打通输入投递。这是继 TLS 之后的第二个
+平台级缺口，优先级建议排在信息流内容之前——没有输入，App 只能看不能用。
+
+
+## 4. 快速验证（用 Release 预编译产物）
 
 ```bash
 git clone https://github.com/BH3GEI/openharmony-toutiao-repro
@@ -122,7 +171,7 @@ scripts/deploy_and_run.sh
 
 ---
 
-## 4. 全量源码构建
+## 5. 全量源码构建
 
 ```bash
 export JAVA_HOME=/path/to/jdk17
@@ -153,7 +202,7 @@ scripts/deploy_and_run.sh --jar amr/build/oh-adapter-runtime.jar
 
 ---
 
-## 5. 仓库结构
+## 6. 仓库结构
 
 ```
 patches/
@@ -166,6 +215,10 @@ amr/
 native/stackgrow/          ART 故障捕获 + musl 栈/fdsan 修补（LD_PRELOAD）
 native/icushim/            ICU 74->72 转发桥
 shims/conscrypt/           空 SSLParametersImpl 源码
+tls-bridge/                BouncyCastle 纯 Java JSSE：真实 TLS（见其 README）
+  prebuilt/wl-tls.jar      bctls + TlsBootstrap，板上用 DexClassLoader 加载
+  prebuilt/wl-cacerts.p12  133 个根证书（板子自己的信任库预烘焙）
+  prebuilt/classes23.dex   android.net.ssl.SSLSockets（追加进 base.apk）
 scripts/                   deploy_and_run / run_capture / keepawake / grant_internet / fetch_prebuilts
 frames/mainactivity/       首帧截图 + 120 行真实控件树
 docs/ROOT-CAUSES.md        全部根因的完整技术记录
@@ -198,19 +251,25 @@ docs/WORKLOG.md            攻坚过程流水（含被证伪的路线，避免�
 
 ---
 
-## 6. 仍未解决
+## 7. 仍未解决
 
-1. **适配层没有 TLS** → 信息流永远为空。这是唯一挡在「有内容的主界面」前面的东西。
-   下一步的靶标分析见 [`docs/NETWORK_STACK_ANALYSIS.md`](docs/NETWORK_STACK_ANALYSIS.md)：
-   App 自带 `libsscronet.so` + `libttboringssl.so`，走通 Cronet 比移植 conscrypt 短得多。
-2. **PopupWindow 拿不到真正的 OH scene session** —— 现在是被**静默**掉的，
+1. ~~适配层没有 TLS~~ → **已解决**，见 [`tls-bridge/`](tls-bridge/README.md)：
+   接入 BouncyCastle 纯 Java JSSE，真握手 TLSv1.3、133 根证书验链、
+   `DoConnect` 失败 4→0、连得上 `api.toutiaoapi.com` 等真实业务域名。
+   **但信息流仍为空** —— App 自己在 0–3 s 内 `user_canceled` 掉了大多数连接，
+   下一步要顺 `X.QvG.A → X.Qw9.q → X.QwC.t` 反查 TTNet 的取消逻辑。
+2. **触控输入未投递到 App**（本轮新发现，见第 3 节验收矩阵）。
+   输入通道建得出来（`createInputChannelPair OK`）但 OH multimodal 从不投递事件，
+   频道 Tab / 底部导航 / 搜索框全部点不动。**没有输入，App 只能看不能用。**
+3. **PopupWindow 拿不到真正的 OH scene session** —— 现在是被**静默**掉的，
    弹窗不可见也点不到。要真正可用，需要适配层给子窗口分配 session。
-3. **JIT 不可用**（`JitCompiler::ParseCompilerOptions` 空指针），只能解释执行，
-   所以首帧要 60–80 秒。
+4. **JIT 不可用**（`JitCompiler::ParseCompilerOptions` 空指针），只能解释执行，首帧要 80–110 秒。
+   未试过的一条：`APPSPAWNX_FORCE_INT` 与 `APPSPAWNX_NO_JIT` 是**独立**的，
+   只把前者置 0 可切到 nterp 快速解释器而不触发 JIT 崩溃路径（需重启板子）。
 
 ---
 
-## 7. 授权与合规
+## 8. 授权与合规
 
 本仓库**不包含**今日头条的原始 APK。`patches/` 里只有**差分补丁与偏移**，
 需要你自备一份合法获得的 `base.apk`（sha256 见 `patch_base_apk.py`）。

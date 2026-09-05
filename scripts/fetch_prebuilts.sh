@@ -22,7 +22,9 @@ SUMS="$DEST/SHA256SUMS"
 # line of that file, so an asset missing here shows up as a hard failure.
 ASSETS=(
     base.final6.apk
+    base.final7.apk
     oh-adapter-runtime.jar
+    oh-adapter-runtime.tls.jar
     libwestlake_stackgrow.so
     libwlicu.so
     libtttext_lite.patched.so

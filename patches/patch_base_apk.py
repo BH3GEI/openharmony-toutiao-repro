@@ -17,6 +17,10 @@ Six edits, all byte-length preserving except the two zip-level ones:
   + add    classes22.dex                            conscrypt presence shim
   - remove lib/arm64-v8a/libnpth.so                  fdsan ABI clash
 
+With --tls it additionally adds classes23.dex (android.net.ssl.SSLSockets), i.e.
+it produces base.final7.apk -- the build that pairs with the BouncyCastle TLS
+bridge in tls-bridge/.
+
 Why byte-length preserving matters: every dex patch replaces an instruction with
 another of the *same encoded width* (a 4-byte 21c `sget-object` becomes
 `return-void; nop`, a 4-byte 21t `if-nez` becomes two `nop`s, ...).  Instruction
@@ -41,6 +45,10 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHIM_DEX = os.path.join(HERE, "prebuilt", "classes22.dex")
+# TLS bridge: okhttp's Android10Platform calls android.net.ssl.SSLSockets purely
+# on SDK_INT>=29, but that API belongs to conscrypt and does not exist here.  It
+# is resolved by the *app* class loader, so it has to ride in the app's own dex.
+TLS_DEX = os.path.join(HERE, os.pardir, "tls-bridge", "prebuilt", "classes23.dex")
 
 # sha256 of the pristine base.apk this patch set was derived from.
 REFERENCE_INPUT_SHA256 = "b6423fdc6d30c07e7f8316755d0657abd184d66aac99891ec81d555880b3e48b"
@@ -75,6 +83,7 @@ DEX_PATCHES = {
 }
 
 ADD_ENTRY = "classes22.dex"
+TLS_ENTRY = "classes23.dex"
 DROP_ENTRIES = {"lib/arm64-v8a/libnpth.so"}
 
 
@@ -106,7 +115,7 @@ def dos_time(dt):
            (dt[3] << 11) | (dt[4] << 5) | (dt[5] // 2)
 
 
-def repack(src: str, dst: str, verbose: bool) -> None:
+def repack(src: str, dst: str, verbose: bool, with_tls: bool = False) -> None:
     zin = zipfile.ZipFile(src)
     present = set(zin.namelist())
     for entry in DEX_PATCHES:
@@ -116,6 +125,8 @@ def repack(src: str, dst: str, verbose: bool) -> None:
         raise SystemExit(f"[FAIL] input apk already contains {ADD_ENTRY} -- already patched?")
     if not os.path.exists(SHIM_DEX):
         raise SystemExit(f"[FAIL] missing {SHIM_DEX} (conscrypt shim dex)")
+    if with_tls and not os.path.exists(TLS_DEX):
+        raise SystemExit(f"[FAIL] missing {TLS_DEX} (TLS bridge dex)")
 
     fin = open(src, "rb")
     out = open(dst, "wb")
@@ -167,6 +178,14 @@ def repack(src: str, dst: str, verbose: bool) -> None:
     emit(ADD_ENTRY.encode(), b"", comp, zlib.crc32(shim) & 0xFFFFFFFF,
          len(comp), len(shim), zipfile.ZIP_DEFLATED, (2026, 9, 5, 0, 0, 0), 20, 20, 0, 0)
 
+    if with_tls:
+        tls = open(TLS_DEX, "rb").read()
+        c = zlib.compressobj(9, zlib.DEFLATED, -15)
+        comp = c.compress(tls) + c.flush()
+        print(f"  + add    {TLS_ENTRY} ({len(tls)} bytes -> {len(comp)})")
+        emit(TLS_ENTRY.encode(), b"", comp, zlib.crc32(tls) & 0xFFFFFFFF,
+             len(comp), len(tls), zipfile.ZIP_DEFLATED, (2026, 9, 5, 0, 0, 0), 20, 20, 0, 0)
+
     cd = out.tell()
     for (name, extra, crc, csize, usize, ctype, dt, off,
          xver, cver, iattr, eattr) in central:
@@ -190,6 +209,9 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true", help="show every byte edit")
     ap.add_argument("--verify", metavar="REF_APK",
                     help="compare per-entry contents against a reference apk")
+    ap.add_argument("--tls", action="store_true",
+                    help="also add the TLS bridge dex (android.net.ssl.SSLSockets) "
+                         "-> produces base.final7.apk instead of base.final6.apk")
     ap.add_argument("--force", action="store_true",
                     help="proceed even if the input sha256 is unexpected")
     args = ap.parse_args()
@@ -210,7 +232,7 @@ def main():
         print(msg)
 
     print(f"output: {args.output}")
-    repack(args.input, args.output, args.verbose)
+    repack(args.input, args.output, args.verbose, with_tls=args.tls)
 
     z = zipfile.ZipFile(args.output)
     bad = z.testzip()

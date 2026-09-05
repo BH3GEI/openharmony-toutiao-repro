@@ -5,6 +5,7 @@
 #   scripts/deploy_and_run.sh                     # deploy everything, then run
 #   scripts/deploy_and_run.sh --run-only          # just launch + capture
 #   scripts/deploy_and_run.sh --apk path/to.apk   # override the apk
+#   scripts/deploy_and_run.sh --tls               # also push the TLS bridge payload
 #
 # Everything is relative to the repo; the only host assumption is that `hdc`
 # talks to the board.  Override with:
@@ -25,15 +26,25 @@ ICUSHIM="${ICUSHIM:-$ROOT/prebuilts/libwlicu.so}"
 TTTEXT="${TTTEXT:-$ROOT/prebuilts/libtttext_lite.patched.so}"
 
 RUN_ONLY=0
+WITH_TLS=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --run-only) RUN_ONLY=1; shift ;;
+        --tls)      WITH_TLS=1; shift ;;
         --apk)      APK="$2"; shift 2 ;;
         --jar)      JAR="$2"; shift 2 ;;
         -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
+
+# --tls needs the apk that carries classes23.dex
+if [ "$WITH_TLS" = 1 ]; then
+    # --tls needs both the apk carrying classes23.dex and the jar carrying the
+    # TLS gateway (ActivityManagerRouting.hijackTlsShim).
+    [ "$APK" = "$ROOT/prebuilts/base.final6.apk" ] && APK="$ROOT/prebuilts/base.final7.apk"
+    [ "$JAR" = "$ROOT/prebuilts/oh-adapter-runtime.jar" ] && JAR="$ROOT/prebuilts/oh-adapter-runtime.tls.jar"
+fi
 
 hdc() { if [ -n "${HDC_TARGET:-}" ]; then "$HDC" -t "$HDC_TARGET" "$@"; else "$HDC" "$@"; fi; }
 sh_() { hdc shell "$@"; }
@@ -91,6 +102,19 @@ run scripts/fetch_prebuilts.sh first, or build from source (see README)" >&2; ex
          rm -f /data/local/tmp/libwlicu.so /data/local/tmp/libtttext_lite.so
          echo '  icu shim + patched tttext ok'"
 
+    if [ "$WITH_TLS" = 1 ]; then
+        banner "push TLS bridge payload"
+        # The adapter has no Java TLS at all; tls-bridge/ carries BouncyCastle's
+        # pure-Java JSSE plus a prebaked 133-root trust store.  These are *new*
+        # files -- nothing on the board is overwritten.  Needs an apk built with
+        # --tls (classes23.dex) and an adapter jar containing the TLS gateway.
+        for f in "$ROOT/tls-bridge/prebuilt/wl-tls.jar" "$ROOT/tls-bridge/prebuilt/wl-cacerts.p12"; do
+            [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
+            hdc file send "$f" "/data/local/tmp/$(basename "$f")"
+        done
+        sh_ "ls -l /data/local/tmp/wl-tls.jar /data/local/tmp/wl-cacerts.p12"
+    fi
+
     banner "grant INTERNET via AccessToken"
     # The adapter's installer maps no permissions at all, so BMS/ATM report the
     # app as having none and appspawn installs a seccomp filter that fails
@@ -118,7 +142,12 @@ MainActivity.  Expect white until roughly t=60s and the main interface from
 t=80s on -- the whole startup runs in the ART interpreter (APPSPAWNX_FORCE_INT=1),
 so it is slow but it does get there.
 
-The feed area stays empty on purpose: the adapter's TLS is a construct-only
-SSLContext ("TLS shim: no real networking"), so no articles can be fetched.
-Chrome (search bar, channel tabs, bottom nav) is the first-frame acceptance.
+Without --tls the feed stays empty by construction: the adapter's SSLContext is a
+construct-only stub, so no article can be fetched.  With --tls the handshakes do
+succeed (see tls-bridge/README.md) but the feed is still empty -- TTNet cancels
+its own connections.  Either way the acceptance for this repo is the first frame:
+search bar, channel tabs and bottom nav rendered.
+
+Note: touch input is not delivered to the app on this adapter, so the UI cannot
+be driven by uinput -- see the acceptance matrix in README.md section 3.
 EOT
