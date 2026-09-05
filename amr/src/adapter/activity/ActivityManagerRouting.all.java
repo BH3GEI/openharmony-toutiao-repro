@@ -60,6 +60,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             throws RemoteException {
         ensureStubServices();
         ensurePackageManagerWrapped();
+        loadVelocityTrackerShim();
         loadAlooperShim();
         startTlsBootstrap();
         startViewTreeDumper();
@@ -670,6 +671,109 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         t.setDaemon(true);
         t.start();
         System.err.println("[WL-VIEWTREE] off-main probe armed (4 passes)");
+    }
+
+
+    /* ------------------------------------------------------------------
+     * VelocityTracker
+     *
+     * framework.jar declares android.view.VelocityTracker's seven native
+     * methods and nothing implements them, so the first touch to reach any
+     * scrolling container dies:
+     *
+     *   UnsatisfiedLinkError: No implementation found for
+     *       long android.view.VelocityTracker.nativeInitialize(int)
+     *     at android.view.VelocityTracker.obtain(VelocityTracker.java:230)
+     *     at android.widget.HorizontalScrollView.initOrResetVelocityTracker(:540)
+     *     at android.widget.HorizontalScrollView.onInterceptTouchEvent(:641)
+     *
+     * ViewRootImpl's input stages swallow it, which is exactly why touch looked
+     * like it was arriving and then quietly doing nothing.  The channel row is a
+     * HorizontalScrollView and the feed is a RecyclerView; both obtain() one.
+     *
+     * VelocityTracker is a boot-classpath class, so ART resolves its natives
+     * only against libraries registered under the *boot* class loader.  Loading
+     * the shim into the app namespace (the way libwlalooper.so goes in) would
+     * have no effect at all -- it has to be nativeLoad'ed with a null loader.
+     * ------------------------------------------------------------------ */
+
+    private static final String[] VELTRACK_SHIMS = {
+        "/data/app/el1/bundle/public/com.ss.android.article.news/android/lib/arm64-v8a/libwlveltrack.so",
+        "/data/app/el2/100/base/com.ss.android.article.news/app_lib/libwlveltrack.so",
+        "/data/local/tmp/libwlveltrack.so",
+    };
+
+    private static volatile boolean sVelTrackTried;
+
+    private static void loadVelocityTrackerShim() {
+        if (sVelTrackTried) return;
+        sVelTrackTried = true;
+        String found = null;
+        for (int i = 0; i < VELTRACK_SHIMS.length; i++) {
+            File f = new File(VELTRACK_SHIMS[i]);
+            if (f.isFile() && f.canRead()) { found = VELTRACK_SHIMS[i]; break; }
+        }
+        if (found == null) {
+            System.err.println("[WL-VELTRACK] no shim found in "
+                    + java.util.Arrays.toString(VELTRACK_SHIMS)
+                    + "; scrolling containers will throw on first touch");
+            return;
+        }
+        final String so = found;
+        // The boot class loader is not an option: this adapter's libnativeloader
+        // only admits libopenjdk / libicu_jni / libjavacore there and answers
+        // anything else with "system library is absent from the adapter
+        // manifest".  Go in through the app namespace instead and let the
+        // library's JNI_OnLoad RegisterNatives the methods explicitly, which
+        // does not care which loader it came from.  The app ClassLoader does not
+        // exist yet at attachApplication, so wait for it off-thread -- first
+        // touch is ~80s away, this needs a couple of seconds.
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                long t0 = System.currentTimeMillis();
+                for (int i = 0; i < 400; i++) {
+                    ClassLoader cl = appClassLoader();
+                    if (cl != null) {
+                        String err = nativeLoad(so, cl);
+                        long ms = System.currentTimeMillis() - t0;
+                        if (err != null) {
+                            System.err.println("[WL-VELTRACK] nativeLoad(" + so
+                                    + ") failed after " + ms + "ms: " + err);
+                        } else {
+                            System.err.println("[WL-VELTRACK] loaded " + so
+                                    + " into the app namespace after " + ms + "ms");
+                            velocityTrackerSelfTest();
+                        }
+                        return;
+                    }
+                    try { Thread.sleep(30); } catch (InterruptedException e) { return; }
+                }
+                System.err.println("[WL-VELTRACK] app ClassLoader never appeared; shim not loaded");
+            }
+        }, "wl-veltrack");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** Exercise the exact call chain HorizontalScrollView takes, once, at startup. */
+    private static void velocityTrackerSelfTest() {
+        try {
+            Class<?> vt = Class.forName("android.view.VelocityTracker");
+            Object t = vt.getMethod("obtain").invoke(null);
+            vt.getMethod("computeCurrentVelocity", int.class).invoke(t, Integer.valueOf(1000));
+            Object vx = vt.getMethod("getXVelocity").invoke(t);
+            Object vy = vt.getMethod("getYVelocity").invoke(t);
+            vt.getMethod("recycle").invoke(t);
+            System.err.println("[WL-VELTRACK] self-test OK: obtain/compute/recycle,"
+                    + " xVelocity=" + vx + " yVelocity=" + vy);
+        } catch (Throwable th) {
+            Throwable c = th;
+            while (c instanceof InvocationTargetException
+                    && ((InvocationTargetException) c).getTargetException() != null) {
+                c = ((InvocationTargetException) c).getTargetException();
+            }
+            System.err.println("[WL-VELTRACK] self-test FAILED: " + c);
+        }
     }
 
     /* ------------------------------------------------------------------

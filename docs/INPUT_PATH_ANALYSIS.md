@@ -289,12 +289,7 @@ java.lang.UnsatisfiedLinkError: No implementation found for
 底部导航（`tapv 1050 1855`）不在滚动容器里，所以不抛异常、`down=true up=true`，
 但同样没有可见变化——那是另一个待查项，不能与本条混为一谈。
 
-**修复方向**：`VelocityTracker` 是 BCP 类，ART 只在 **boot classloader** 的
-已加载库里找它的 JNI 符号，所以往 app 命名空间里塞 .so 没用。
-可行路线是编一个 arm64 小库导出 `Java_android_view_VelocityTracker_native*`
-（纯记账，速度返 0 即可，点击不需要真实速度），再用 S2 的
-`Runtime.nativeLoad(path, loader)` 手法以 **null（boot）loader** 注入。
-这是继 ICU、libnpth、ColorMatrix 之后的同一类缺口。
+**已修复**，见下一节。
 
 ---
 
@@ -389,3 +384,66 @@ OUT=amr/build/oh-adapter-runtime.all.jar amr/build_amr.sh
 
 部署前板上那份已备份为
 `/data/pr03-74e6-portable/android/framework/oh-adapter-runtime.jar.s2-tls`。
+
+
+---
+
+## 8. 补上 `VelocityTracker`：`native/veltrack/`
+
+`VelocityTracker` 只声明了 7 个 native 方法，全部无实现：
+
+```
+nativeInitialize(I)J        nativeDispose(J)V       nativeClear(J)V
+nativeAddMovement(JLandroid/view/MotionEvent;)V     nativeComputeCurrentVelocity(JIF)V
+nativeGetVelocity(JII)F     nativeIsAxisSupported(I)Z
+```
+
+`native/veltrack/wl_veltrack.c` 把它们补齐（OpenHarmony native SDK 交叉编译到 aarch64）。
+**只做记账**：发放真实的 per-tracker 句柄让 `obtain`/`recycle`/`finalize` 配平，速度一律返 0。
+点击、拖拽、跟手滚动都只依赖触摸坐标，不需要真实速度；只有**惯性滑动（fling）**会退化成"不滑"。
+真算速度要在触摸派发过程中于 UI 线程上把 `MotionEvent` 经 JNI 读回来，
+为一个当前用不上的能力扩大爆炸半径，不划算。
+
+### 绑定方式：`RegisterNatives`，不是符号查找
+
+第一版走的是"以 boot classloader `nativeLoad`"，**被适配层挡了**：
+
+```
+[WL-VELTRACK] nativeLoad(/system/android/lib64/libwlveltrack.so, boot) failed:
+              system library is absent from the adapter manifest
+```
+
+这条消息来自 `libnativeloader.so`，它带着一份**硬编码的三条白名单**
+（`libopenjdk.so` / `libicu_jni.so` / `libjavacore.so`，见
+`westlake::nativeloader::policy::kBridgePermittedPaths`），不是可配置文件。
+
+所以改成**根本不依赖符号查找**：把库放进 app 的 native lib 目录、用 **app classloader**
+加载（这条路是通的，`libwlalooper.so` 就这么进去的），再由库的 `JNI_OnLoad`
+对 `android.view.VelocityTracker` 调 `RegisterNatives`。
+**显式注册优先于查找，且不关心库是从哪个 loader 进来的**——BCP 类的限制就此绕开。
+
+```
+[WL-VELTRACK] loaded …/lib/arm64-v8a/libwlveltrack.so into the app namespace after 3828ms
+[WL-VELTRACK] self-test OK: obtain/compute/recycle, xVelocity=0.0 yVelocity=0.0
+```
+
+自检刻意走 `HorizontalScrollView` 的那条调用链（`obtain` → `computeCurrentVelocity`
+→ `getXVelocity` → `recycle`），启动时跑一次，失败会直接打在日志里。
+
+### 结果：频道切换成功
+
+| 动作 | 结果 |
+|---|---|
+| `tapv 320 213` | 推荐 → **热榜**（红线移位，页面换成热榜空态"网络异常，请稍后重试"）|
+| `tapv 560 213` | 热榜 → **视频**（页面换成"当前网络不可用，点击重试"，**频道行自身滚动了**）|
+| `tap 840 213` | → **娱乐**（走 `dispatchOnMainThread` → ViewRootImpl 的正式路径，同样成功）|
+
+两条路径都通：`tapv` 直通 DecorView，`tap` 走
+`InputEventBridge.dispatchOnMainThread` → `InputEventReceiver.dispatchInputEvent`
+→ ViewRootImpl 阶段链，也就是 `OH_InputMotionWorker` 本来要用的那条。
+整轮 `UnsatisfiedLinkError` 计数为 0。
+
+频道行会把选中项滚动到可见位置（娱乐那张图里"关注/推荐/热榜"已滚出左边、
+"汽车/财经/军事"露了出来），这本身就是 `HorizontalScrollView` 恢复工作的直接证据。
+
+信息流仍然是空的——那是 TTNet 自取消的问题（S2 在查），与输入无关。

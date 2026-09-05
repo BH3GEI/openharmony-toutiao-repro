@@ -147,11 +147,33 @@ hdc shell "echo 'tap 400 250' > /data/local/tmp/wl_input.cmd"      # 或用 scri
 但每个新 Activity 都要重付一次**解释器冷渲染成本**——主界面首帧本身就要 80–110 s，
 采样时给的 6 s 远远不够。要采到这些页面，需要每个 Activity 单独等 2 分钟。
 
-### 结论
+### 结论：交互已打通（2026-09-05 更新）
 
-**本轮的界面矩阵无法通过交互采样完成**——`uinput` 那条路走不通，而且以后也走不通：
-硬件触控要贯通必须在适配层源码里实现 MMI 订阅（`docs/INPUT_PATH_ANALYSIS.md` 第 5 节）。
-`wl-input-pump` 绕开了这一层，让矩阵可以在下一轮补齐。
+`uinput` 那条路走不通，而且以后也走不通：硬件触控要贯通必须在适配层源码里实现
+MMI 订阅（`docs/INPUT_PATH_ANALYSIS.md` 第 5 节）。但绕开它之后，**界面是可以驱动的**。
+
+打通共需两件事：
+
+1. **`wl-input-pump`**——从适配层输入链路唯一完整的那一半（消费端）重新接入；
+2. **`libwlveltrack.so`**——补上 `android.view.VelocityTracker` 缺失的 7 个 native 方法。
+   没有它，触摸一碰到任何可滚动容器就抛 `UnsatisfiedLinkError`，
+   而这个异常被 ViewRootImpl 的阶段链吞掉，表现为"事件送到了但什么也没发生"。
+
+| # | 界面 | 动作 | 结果 | 截图 |
+|---|---|---|---|---|
+| 1 | 推荐（基线）| — | ✅ | ![](frames/screens/10-pump-00-baseline-recommend.jpeg) |
+| 2 | **热榜** | `wl_input.sh tapv 320 213` | ✅ 红线移位，页面换成热榜空态 | ![](frames/screens/11-pump-tapv-hotlist.jpeg) |
+| 3 | **视频** | `wl_input.sh tapv 560 213` | ✅ 频道行自身滚动，页面换成视频空态 | ![](frames/screens/12-pump-tapv-video.jpeg) |
+| 4 | **娱乐** | `wl_input.sh tap 840 213` | ✅ 走 ViewRootImpl 正式路径，同样成功 | ![](frames/screens/13-pump-tap-entertainment.jpeg) |
+
+两条投递路径都通：`tap` 走
+`InputEventBridge.dispatchOnMainThread` → `InputEventReceiver.dispatchInputEvent`
+→ ViewRootImpl，也就是 `OH_InputMotionWorker` 本来要用的那条；
+`tapv` 直通 `DecorView.dispatchTouchEvent`，主要用于诊断。
+
+信息流仍是空的（TTNet 自取消，与输入无关），所以各频道显示的是各自的空态文案——
+注意热榜是「网络异常，请稍后重试」而视频是「当前网络不可用，点击重试」，
+两者不同，进一步佐证确实换了页面而不是重绘。
 
 
 ## 4. 快速验证（用 Release 预编译产物）
