@@ -60,9 +60,573 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             throws RemoteException {
         ensureStubServices();
         ensurePackageManagerWrapped();
+        loadAlooperShim();
+        startTlsBootstrap();
         startViewTreeDumper();
         startInputPump();
         super.attachApplication(app, startSeq);
+    }
+
+    /* ------------------------------------------------------------------
+     * TLS
+     *
+     * The adapter has no TLS at all: core-oj.jar carries the javax.net.ssl API
+     * but not one line of sun.security.ssl, bouncycastle.jar is AOSP's crypto-only
+     * bcprov, and conscrypt -- which security.properties still names as
+     * security.provider.1/4 and as ssl.SocketFactory.provider -- is absent, classes
+     * and libjavacrypto.so alike.  So SSLContext.getInstance("TLS") has no
+     * implementation to find, every TTNet DoConnect dies, and the feed stays empty.
+     *
+     * westlake.tls.TlsBootstrap installs upstream BouncyCastle's pure-Java JSSE as
+     * a real provider.  It lives in a separate dex loaded from disk rather than
+     * being merged in here: this jar is reflectively injected as the adapter's
+     * IActivityManager and wants to stay small, and keeping the TLS stack in its
+     * own file means it can be iterated on without rebuilding this one.
+     * ------------------------------------------------------------------ */
+
+    /* ------------------------------------------------------------------
+     * ALooper shim
+     *
+     * Toutiao's real network engine is cronet (libsscronet.so).  It never loads
+     * here, and OpenHarmony's musl linker says exactly why:
+     *
+     *   MUSL-LDSO: relocating failed: symbol not found.
+     *     dso=.../libsscronet.so  s=ALooper_prepare
+     *
+     * This adapter's libandroid.so exports 750 symbols but not one ALooper_*, and
+     * libsscronet.so imports five of them (prepare/acquire/release/addFd/removeFd).
+     * So System.loadLibrary("sscronet") throws, TTNet counts the failure in
+     * chromium_boot_failures, and after a few tries disables cronet permanently and
+     * falls back to okhttp -- which is why configuration traffic works over the TLS
+     * bridge while the article feed never arrives.
+     *
+     * libwlalooper.so supplies those five by forwarding to android::Looper in
+     * libutils, i.e. the same looper the Java MessageQueue drives.
+     *
+     * Loading it from here, rather than via LD_PRELOAD, is deliberate: preloading
+     * put it into appspawn-x itself, which then failed to start and no app could
+     * spawn at all.  Doing it in-process is scoped to this app, needs no config
+     * change and no reboot, and cannot take the runtime down with it.
+     * ------------------------------------------------------------------ */
+
+    private static volatile boolean sAlooperTried;
+
+    /**
+     * Candidate locations, most specific first.
+     *
+     * The app's own native library directories come first, and that ordering is
+     * the whole trick: this adapter's native loader only registers a linker
+     * namespace ("native dependency domain") for the app's own library paths, so
+     * loading the same file from /system/android/lib64 fails with
+     *     UnsatisfiedLinkError: no native dependency domain for ClassLoader
+     * even when the app's own ClassLoader is passed explicitly.  Sitting next to
+     * libsscronet.so puts the shim inside the domain that already works.
+     */
+    private static final String[] ALOOPER_SHIMS = {
+        "/data/app/el2/100/base/com.ss.android.article.news/app_librarian/"
+                + "default.version.6986727972/libwlalooper.so",
+        "/data/app/el1/bundle/public/com.ss.android.article.news/android/lib/"
+                + "arm64-v8a/libwlalooper.so",
+        "/system/android/lib64/libwlalooper.so",
+        "/data/pr03-74e6-portable/android/lib64/libwlalooper.so",
+    };
+
+    /**
+     * Load the shim into the *app's* linker namespace, on a background thread.
+     *
+     * A plain System.load() from this class fails with
+     *     UnsatisfiedLinkError: no native dependency domain for ClassLoader
+     * because the namespace is derived from the calling class's loader, and this
+     * jar's loader has none registered.  Runtime.nativeLoad() takes the loader
+     * explicitly, so passing the app's gives the library a real namespace.
+     *
+     * The app's ClassLoader does not exist yet at attachApplication, hence the
+     * poll.  There is room for it: measured from hilog, the app starts at
+     * 21:54:10.594 and cronet's first relocation failure is at 21:54:25.275 --
+     * about 14.7s of slack.
+     */
+    private static void loadAlooperShim() {
+        if (sAlooperTried) return;
+        sAlooperTried = true;
+        String path = null;
+        for (int i = 0; i < ALOOPER_SHIMS.length; i++) {
+            java.io.File f = new java.io.File(ALOOPER_SHIMS[i]);
+            if (f.isFile() && f.canRead()) { path = ALOOPER_SHIMS[i]; break; }
+        }
+        if (path == null) {
+            System.err.println("[WL-ALOOPER] no shim found in "
+                    + java.util.Arrays.toString(ALOOPER_SHIMS));
+            return;
+        }
+        final String so = path;
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                long t0 = System.currentTimeMillis();
+                for (int i = 0; i < 400; i++) {         // up to ~12s, polled fast
+                    ClassLoader cl = appClassLoader();
+                    if (cl != null) {
+                        String err = nativeLoad(so, cl);
+                        long ms = System.currentTimeMillis() - t0;
+                        if (err == null) {
+                            System.err.println("[WL-ALOOPER] loaded " + so
+                                    + " into the app namespace after " + ms
+                                    + "ms (supplies ALooper_* for libsscronet)");
+                        } else {
+                            System.err.println("[WL-ALOOPER] nativeLoad(" + so
+                                    + ") failed after " + ms + "ms: " + err);
+                        }
+                        return;
+                    }
+                    try { Thread.sleep(30); } catch (InterruptedException e) { return; }
+                }
+                System.err.println("[WL-ALOOPER] app ClassLoader never appeared; shim not loaded");
+            }
+        }, "wl-alooper");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * The app's own ClassLoader, or null if it does not exist yet.
+     *
+     * Prefer ActivityThread.mBoundApplication.info (the LoadedApk): it carries a
+     * usable ClassLoader well before Application is constructed, and the previous
+     * attempt -- which waited for currentApplication() -- only got one at ~11.8s
+     * against cronet's ~14.7s, far too close for comfort.
+     */
+    private static ClassLoader appClassLoader() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object cur = at.getMethod("currentActivityThread").invoke(null);
+            if (cur != null) {
+                Object bound = readField(at, cur, "mBoundApplication");
+                if (bound != null) {
+                    Object info = readField(bound.getClass(), bound, "info");
+                    if (info != null) {
+                        Object cl = info.getClass()
+                                .getMethod("getClassLoader").invoke(info);
+                        if (cl != null) return (ClassLoader) cl;
+                    }
+                }
+            }
+            Object app = at.getMethod("currentApplication").invoke(null);
+            if (app == null) return null;
+            return (ClassLoader) app.getClass().getMethod("getClassLoader").invoke(app);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * @return null on success, otherwise the linker's error message.  AOSP has
+     *         carried two signatures for this over the years; try both.
+     */
+    private static String nativeLoad(String path, ClassLoader loader) {
+        try {
+            Method m;
+            try {
+                m = Runtime.class.getDeclaredMethod("nativeLoad",
+                        String.class, ClassLoader.class);
+                m.setAccessible(true);
+                return (String) m.invoke(null, path, loader);
+            } catch (NoSuchMethodException e) {
+                m = Runtime.class.getDeclaredMethod("nativeLoad",
+                        String.class, ClassLoader.class, Class.class);
+                m.setAccessible(true);
+                return (String) m.invoke(null, path, loader,
+                        ActivityManagerRouting.class);
+            }
+        } catch (Throwable t) {
+            return String.valueOf(t);
+        }
+    }
+
+    /* ---- TLS gate ----------------------------------------------------
+     *
+     * The adapter installs its own provider, "TlsShim"
+     * (com.android.internal.os.TlsShimProvider, "TLS construct-but-fake shim for
+     * OH (no real networking)"), before this class is even constructed.  It
+     * answers SSLContext.getInstance("TLS") with a context that builds fine and
+     * then throws UnsupportedOperationException on first real use -- which is the
+     * "TLS shim: no real networking" that every TTNet DoConnect died on.
+     *
+     * Registering a real provider at position 1 is not enough on its own:
+     * measured against the view-tree probe's fixed 30/60/85s passes, TTNet's first
+     * DoConnect lands before t=30s while loading BouncyCastle takes ~31s, and
+     * okhttp caches the SSLSocketFactory it got from that first lookup -- so every
+     * later request keeps using the shim even once the real provider is up.
+     *
+     * Rather than race, take the shim's place.  java.security.Provider is a Map,
+     * so its service entries can simply be re-pointed at the classes below; JCA
+     * then instantiates *these* through the shim provider's own class loader,
+     * which is this jar.  Callers that arrive before BouncyCastle has finished
+     * loading block on a latch instead of receiving a broken context, so there is
+     * no longer a wrong answer to cache -- whoever asks first just waits.
+     */
+
+    private static final java.util.concurrent.CountDownLatch sTlsReady =
+            new java.util.concurrent.CountDownLatch(1);
+    /** The real JSSE provider, published by the bootstrap thread. */
+    private static volatile java.security.Provider sRealJsse;
+    /** Our working trust manager, published alongside it. */
+    private static volatile javax.net.ssl.X509TrustManager sRealTrustManager;
+    /** How long a caller will wait for the real stack before giving up. */
+    private static final long TLS_WAIT_MS = 120000L;
+
+    private static java.security.Provider awaitRealJsse() throws java.io.IOException {
+        java.security.Provider p = sRealJsse;
+        if (p != null) return p;
+        try {
+            long t0 = System.currentTimeMillis();
+            if (!sTlsReady.await(TLS_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                throw new java.io.IOException("timed out waiting for the TLS provider");
+            }
+            long waited = System.currentTimeMillis() - t0;
+            if (waited > 50) {
+                System.err.println("[WL-TLS] gate: caller waited " + waited + "ms for the real provider");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new java.io.IOException("interrupted waiting for the TLS provider");
+        }
+        p = sRealJsse;
+        if (p == null) throw new java.io.IOException("TLS provider unavailable");
+        return p;
+    }
+
+    /**
+     * Android's Network Security Config trust manager, which cannot work here.
+     *
+     * okhttp asks the platform for its trust managers and hands whatever it gets
+     * to SSLContext.init().  On this adapter that is
+     * android.security.net.config.RootTrustManager, whose checkServerTrusted()
+     * builds a com.android.org.conscrypt.TrustManagerImpl -- a class the adapter
+     * does not ship.  The result, mid-handshake:
+     *
+     *   java.lang.NoSuchMethodError: No direct method
+     *     <init>(KeyStore;CertPinManager;ConscryptCertStore)V
+     *     in class Lcom/android/org/conscrypt/TrustManagerImpl;
+     *       at android.security.net.config.NetworkSecurityTrustManager.<init>
+     *       at android.security.net.config.RootTrustManager.checkServerTrusted
+     *       at okhttp3.internal.connection.RealConnection.connectTls
+     *
+     * That is an Error, not an Exception, so okhttp's `catch (Exception)` does not
+     * catch it; it unwinds through connectTls() whose finally-block does
+     * closeQuietly(sslSocket) -- surfacing as the user_canceled(90) alerts that
+     * killed nearly every app connection.
+     */
+    private static final String ANDROID_ROOT_TRUST_MANAGER =
+            "android.security.net.config.RootTrustManager";
+
+    /**
+     * Replace the platform trust manager with ours; leave anything else alone.
+     *
+     * A caller that brings its own anchors (certificate pinning, a private CA)
+     * must keep them, so only the known-broken platform one is substituted.
+     */
+    private static javax.net.ssl.TrustManager[] sanitizeTrustManagers(
+            javax.net.ssl.TrustManager[] tms) {
+        javax.net.ssl.X509TrustManager ours = sRealTrustManager;
+        if (ours == null) return tms;                 // nothing better to offer
+        if (tms == null || tms.length == 0) {
+            return new javax.net.ssl.TrustManager[] { ours };
+        }
+        javax.net.ssl.TrustManager[] out = null;
+        for (int i = 0; i < tms.length; i++) {
+            if (tms[i] == null) continue;
+            if (ANDROID_ROOT_TRUST_MANAGER.equals(tms[i].getClass().getName())) {
+                if (out == null) {
+                    out = new javax.net.ssl.TrustManager[tms.length];
+                    System.arraycopy(tms, 0, out, 0, tms.length);
+                }
+                out[i] = ours;
+                System.err.println("[WL-TLS] replaced " + ANDROID_ROOT_TRUST_MANAGER
+                        + " (needs conscrypt's TrustManagerImpl, absent here)"
+                        + " with the bridge's trust manager");
+            }
+        }
+        return out != null ? out : tms;
+    }
+
+    /** SSLContext.TLS: waits for the real provider, then is a plain delegate. */
+    public static final class TlsGateSpi extends javax.net.ssl.SSLContextSpi {
+        private volatile javax.net.ssl.SSLContext mDelegate;
+
+        public TlsGateSpi() { }
+
+        /** The delegate, default-initialised if the caller never called init(). */
+        private javax.net.ssl.SSLContext ready() {
+            javax.net.ssl.SSLContext d = mDelegate;
+            if (d != null) return d;
+            synchronized (this) {
+                if (mDelegate == null) {
+                    try {
+                        javax.net.ssl.SSLContext c =
+                                javax.net.ssl.SSLContext.getInstance("TLS", awaitRealJsse());
+                        c.init(null, null, null);
+                        mDelegate = c;
+                    } catch (Throwable t) {
+                        throw new IllegalStateException("TLS gate: no real provider", t);
+                    }
+                }
+                return mDelegate;
+            }
+        }
+
+        @Override
+        protected void engineInit(javax.net.ssl.KeyManager[] km,
+                                  javax.net.ssl.TrustManager[] tm,
+                                  java.security.SecureRandom sr)
+                throws java.security.KeyManagementException {
+            try {
+                javax.net.ssl.SSLContext c =
+                        javax.net.ssl.SSLContext.getInstance("TLS", awaitRealJsse());
+                c.init(km, sanitizeTrustManagers(tm), sr);
+                mDelegate = c;
+            } catch (java.security.KeyManagementException e) {
+                throw e;
+            } catch (Throwable t) {
+                throw new java.security.KeyManagementException("TLS gate init failed", t);
+            }
+        }
+
+        @Override protected javax.net.ssl.SSLSocketFactory engineGetSocketFactory() {
+            return ready().getSocketFactory();
+        }
+        @Override protected javax.net.ssl.SSLServerSocketFactory engineGetServerSocketFactory() {
+            return ready().getServerSocketFactory();
+        }
+        @Override protected javax.net.ssl.SSLEngine engineCreateSSLEngine() {
+            return ready().createSSLEngine();
+        }
+        @Override protected javax.net.ssl.SSLEngine engineCreateSSLEngine(String host, int port) {
+            return ready().createSSLEngine(host, port);
+        }
+        @Override protected javax.net.ssl.SSLSessionContext engineGetServerSessionContext() {
+            return ready().getServerSessionContext();
+        }
+        @Override protected javax.net.ssl.SSLSessionContext engineGetClientSessionContext() {
+            return ready().getClientSessionContext();
+        }
+        @Override protected javax.net.ssl.SSLParameters engineGetDefaultSSLParameters() {
+            return ready().getDefaultSSLParameters();
+        }
+        @Override protected javax.net.ssl.SSLParameters engineGetSupportedSSLParameters() {
+            return ready().getSupportedSSLParameters();
+        }
+    }
+
+    /**
+     * TrustManagerFactory.PKIX: the shim answered this with an accept-all trust
+     * manager, so it has to be re-pointed too -- okhttp asks for the platform
+     * trust managers here and hands them straight to SSLContext.init().
+     */
+    public static final class TrustGateSpi extends javax.net.ssl.TrustManagerFactorySpi {
+        private volatile javax.net.ssl.TrustManagerFactory mDelegate;
+
+        public TrustGateSpi() { }
+
+        private javax.net.ssl.TrustManagerFactory delegate() throws Exception {
+            javax.net.ssl.TrustManagerFactory f = mDelegate;
+            if (f == null) {
+                // Wait for the stack, then resolve through the normal provider
+                // order rather than naming BouncyCastle: TlsBootstrap installs a
+                // front-end ahead of it that answers the platform-trust-anchor
+                // request from memory.  Asking BC directly would send it looking
+                // for a trust store file the board does not have.
+                awaitRealJsse();
+                f = javax.net.ssl.TrustManagerFactory.getInstance("PKIX");
+                mDelegate = f;
+            }
+            return f;
+        }
+
+        @Override protected void engineInit(java.security.KeyStore ks)
+                throws java.security.KeyStoreException {
+            try {
+                delegate().init(ks);
+            } catch (java.security.KeyStoreException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new java.security.KeyStoreException("TLS gate trust init failed", e);
+            }
+        }
+
+        @Override protected void engineInit(javax.net.ssl.ManagerFactoryParameters spec)
+                throws java.security.InvalidAlgorithmParameterException {
+            try {
+                delegate().init(spec);
+            } catch (java.security.InvalidAlgorithmParameterException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new java.security.InvalidAlgorithmParameterException(e);
+            }
+        }
+
+        @Override protected javax.net.ssl.TrustManager[] engineGetTrustManagers() {
+            try {
+                javax.net.ssl.TrustManagerFactory f = delegate();
+                javax.net.ssl.TrustManager[] tms = f.getTrustManagers();
+                if (tms == null || tms.length == 0) {
+                    // Not initialised by the caller: PKIX with a null KeyStore
+                    // picks up the anchors TlsBootstrap exported.
+                    f.init((java.security.KeyStore) null);
+                    tms = f.getTrustManagers();
+                }
+                return tms;
+            } catch (Exception e) {
+                throw new IllegalStateException("TLS gate: no trust managers", e);
+            }
+        }
+    }
+
+    /**
+     * Re-point the adapter's shim provider at the gate.  Cheap and synchronous:
+     * it only rewrites map entries, so it is safe to do on the attach path, and it
+     * closes the window before any app code can obtain a broken SSLContext.
+     */
+    private static void hijackTlsShim() {
+        try {
+            java.security.Provider shim = java.security.Security.getProvider("TlsShim");
+            if (shim == null) {
+                System.err.println("[WL-TLS] no 'TlsShim' provider to hijack"
+                        + " (adapter may have changed); relying on provider order");
+                return;
+            }
+            String ctxSpi = TlsGateSpi.class.getName();
+            String tmfSpi = TrustGateSpi.class.getName();
+            int n = 0;
+            // Snapshot the keys first: we mutate the map as we go.
+            java.util.List<String> keys = new java.util.ArrayList<String>();
+            for (Object k : shim.keySet()) {
+                if (k instanceof String) keys.add((String) k);
+            }
+            for (int i = 0; i < keys.size(); i++) {
+                String k = keys.get(i);
+                if (k.startsWith("Alg.Alias.")) continue;   // aliases follow the real entry
+                if (k.startsWith("SSLContext.")) { shim.put(k, ctxSpi); n++; }
+                else if (k.startsWith("TrustManagerFactory.")) { shim.put(k, tmfSpi); n++; }
+            }
+            System.err.println("[WL-TLS] hijacked 'TlsShim' provider: " + n
+                    + " service(s) re-pointed at the gate");
+        } catch (Throwable t) {
+            System.err.println("[WL-TLS] hijackTlsShim failed: " + t);
+        }
+    }
+
+    /**
+     * Says whether the android.net.ssl.SSLSockets stand-in we ship in this jar is
+     * actually reachable from the loader okhttp resolves against.  This jar is not
+     * on the boot classpath, so that is a real question, and the answer decides
+     * whether the class can live here or has to go into base.apk as an extra dex.
+     */
+    private static void reportSslSocketsVisibility() {
+        final String cls = "android.net.ssl.SSLSockets";
+        ClassLoader mine = ActivityManagerRouting.class.getClassLoader();
+        ClassLoader ctx = Thread.currentThread().getContextClassLoader();
+        System.err.println("[WL-TLS] loaders: amr=" + mine + " context=" + ctx);
+        try {
+            Class<?> c = Class.forName(cls, false, ctx);
+            System.err.println("[WL-TLS] " + cls + " visible via context loader, defined by "
+                    + c.getClassLoader());
+        } catch (Throwable t) {
+            System.err.println("[WL-TLS] " + cls + " NOT visible via context loader: " + t);
+        }
+    }
+
+    private static volatile boolean sTlsStarted;
+
+    /** Candidate locations for the TLS dex, in order of preference. */
+    private static final String[] TLS_JARS = {
+        "/data/local/tmp/wl-tls.jar",
+        "/data/pr03-74e6-portable/android/framework/wl-tls.jar",
+    };
+
+    private static void startTlsBootstrap() {
+        if (sTlsStarted) return;
+        sTlsStarted = true;
+        // Do this first and inline: it is only map writes, and until it has run
+        // any app code that asks for TLS gets the adapter's broken shim and keeps
+        // the result forever.
+        hijackTlsShim();
+        reportSslSocketsVisibility();
+        /*
+         * Off the calling thread.  Loading ~5400 BouncyCastle classes and standing
+         * up a provider costs seconds even on a desktop JVM, and this board runs
+         * -Xint, so doing it inline would add that straight onto process attach.
+         * The app's own network stack does not come up until well into Lego's init
+         * chain, tens of seconds later, so this comfortably wins the race -- and
+         * WlSSLSocketFactory.install() is synchronized, so an early caller blocks
+         * rather than seeing a half-built provider.
+         */
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                long t0 = System.currentTimeMillis();
+                try {
+                    String jar = null;
+                    for (int i = 0; i < TLS_JARS.length; i++) {
+                        java.io.File f = new java.io.File(TLS_JARS[i]);
+                        if (f.isFile() && f.canRead()) { jar = TLS_JARS[i]; break; }
+                    }
+                    if (jar == null) {
+                        System.err.println("[WL-TLS] no wl-tls.jar found in "
+                                + java.util.Arrays.toString(TLS_JARS));
+                        return;
+                    }
+                    ClassLoader parent = ActivityManagerRouting.class.getClassLoader();
+                    Class<?> dclClass = Class.forName("dalvik.system.DexClassLoader");
+                    Object cl = dclClass.getConstructor(String.class, String.class,
+                                    String.class, ClassLoader.class)
+                            .newInstance(jar, tlsOptimizedDir(), null, parent);
+                    Class<?> boot = ((ClassLoader) cl).loadClass("westlake.tls.TlsBootstrap");
+                    String status = (String) boot.getMethod("install").invoke(null);
+                    sRealJsse = (java.security.Provider)
+                            boot.getMethod("jsseProvider").invoke(null);
+                    sRealTrustManager = (javax.net.ssl.X509TrustManager)
+                            boot.getMethod("trustManager").invoke(null);
+                    System.err.println("[WL-TLS] install: " + status
+                            + " loadMs=" + (System.currentTimeMillis() - t0));
+                    maybeSelfTest(boot);
+                } catch (Throwable e) {
+                    System.err.println("[WL-TLS] bootstrap failed after "
+                            + (System.currentTimeMillis() - t0) + "ms: " + e);
+                    e.printStackTrace();
+                } finally {
+                    // Always release the gate: a caller blocked in awaitRealJsse()
+                    // must get a clear failure rather than hang for two minutes.
+                    sTlsReady.countDown();
+                }
+            }
+        }, "wl-tls-bootstrap");
+        t.setDaemon(true);
+        t.start();
+        System.err.println("[WL-TLS] bootstrap thread armed");
+    }
+
+    /** A writable scratch dir for the dex cache, or null to let ART decide. */
+    private static String tlsOptimizedDir() {
+        String[] cands = { "/data/local/tmp/wl-dexcache", System.getProperty("java.io.tmpdir") };
+        for (int i = 0; i < cands.length; i++) {
+            if (cands[i] == null) continue;
+            java.io.File d = new java.io.File(cands[i]);
+            if (d.isDirectory() ? d.canWrite() : d.mkdirs()) return d.getAbsolutePath();
+        }
+        return null;
+    }
+
+    /**
+     * Opt-in end-to-end proof that TLS works in this process, kept behind a marker
+     * file so a normal run never pays for it.
+     */
+    private static void maybeSelfTest(Class<?> boot) {
+        if (!new java.io.File("/data/local/tmp/wl-tls-selftest").isFile()) return;
+        try {
+            String r = (String) boot.getMethod("selfTest", String.class, int.class, String.class)
+                    .invoke(null, "dm.toutiao.com", 443, "https://dm.toutiao.com/");
+            System.err.println("[WL-TLS] selftest: " + r);
+        } catch (Throwable e) {
+            System.err.println("[WL-TLS] selftest failed: " + e);
+        }
     }
 
     /* ------------------------------------------------------------------

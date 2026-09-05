@@ -6,7 +6,7 @@
 #   scripts/deploy_and_run.sh --run-only          # just launch + capture
 #   scripts/deploy_and_run.sh --apk path/to.apk   # override the apk
 #   scripts/deploy_and_run.sh --tls               # also push the TLS bridge payload
-#   scripts/deploy_and_run.sh --input             # adapter jar with wl-input-pump
+#   scripts/deploy_and_run.sh --all               # TLS gateway + ALooper + input pump
 #
 # Everything is relative to the repo; the only host assumption is that `hdc`
 # talks to the board.  Override with:
@@ -28,12 +28,12 @@ TTTEXT="${TTTEXT:-$ROOT/prebuilts/libtttext_lite.patched.so}"
 
 RUN_ONLY=0
 WITH_TLS=0
-WITH_INPUT=0
+WITH_ALL=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --run-only) RUN_ONLY=1; shift ;;
         --tls)      WITH_TLS=1; shift ;;
-        --input)    WITH_INPUT=1; shift ;;
+        --all)      WITH_ALL=1; shift ;;
         --apk)      APK="$2"; shift 2 ;;
         --jar)      JAR="$2"; shift 2 ;;
         -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
@@ -49,17 +49,23 @@ if [ "$WITH_TLS" = 1 ]; then
     [ "$JAR" = "$ROOT/prebuilts/oh-adapter-runtime.jar" ] && JAR="$ROOT/prebuilts/oh-adapter-runtime.tls.jar"
 fi
 
-# --input needs the jar carrying wl-input-pump.  It is not a Release artifact:
-# build it locally, since it is the one piece you are likely to keep editing.
-if [ "$WITH_INPUT" = 1 ]; then
-    INPUT_JAR="$ROOT/amr/build/oh-adapter-runtime.input.jar"
-    if [ ! -f "$INPUT_JAR" ]; then
-        echo "missing $INPUT_JAR
-build it first:  JAVA_HOME=<jdk11+> OUT=amr/build/oh-adapter-runtime.input.jar amr/build_amr.sh" >&2
+# --all is the merged adapter: first frame + TLS gateway + ALooper shim + input
+# pump.  Built locally rather than shipped as a Release artifact, because it is
+# the piece under active development.  It implies --tls: the TLS gateway needs
+# classes23.dex in the apk and the wl-tls payload on the board.
+if [ "$WITH_ALL" = 1 ]; then
+    ALL_JAR="$ROOT/amr/build/oh-adapter-runtime.all.jar"
+    if [ ! -f "$ALL_JAR" ]; then
+        echo "missing $ALL_JAR
+build it first:
+  JAVA_HOME=<jdk11+> \\
+  SRC=amr/src/adapter/activity/ActivityManagerRouting.all.java \\
+  OUT=amr/build/oh-adapter-runtime.all.jar amr/build_amr.sh" >&2
         exit 1
     fi
-    JAR="$INPUT_JAR"
-    [ "$WITH_TLS" = 1 ] && echo "note: --input overrides --tls's adapter jar (the pump jar has no TLS gateway)" >&2
+    JAR="$ALL_JAR"
+    WITH_TLS=1
+    [ "$APK" = "$ROOT/prebuilts/base.final6.apk" ] && APK="$ROOT/prebuilts/base.final7.apk"
 fi
 
 hdc() { if [ -n "${HDC_TARGET:-}" ]; then "$HDC" -t "$HDC_TARGET" "$@"; else "$HDC" "$@"; fi; }
@@ -92,7 +98,12 @@ run scripts/fetch_prebuilts.sh first, or build from source (see README)" >&2; ex
     hdc file send "$JAR" /data/local/tmp/oh-adapter-runtime.jar
     # /system/android/framework is a bind mount from the pr03 portable tree;
     # write through the source so a runtime-recover run does not undo it.
+    # Keep the jar that is currently on the board: it is the only copy of
+    # whatever the last person deployed, and rolling back matters more than
+    # disk.  .bak is overwritten each time; .orig is written once, ever.
     sh_ "T=/data/pr03-74e6-portable/android/framework/oh-adapter-runtime.jar;
+         [ -f \$T.orig ] || cp \$T \$T.orig;
+         cp \$T \$T.bak;
          cp /data/local/tmp/oh-adapter-runtime.jar \$T && chmod 644 \$T &&
          chcon u:object_r:system_file:s0 \$T 2>/dev/null;
          md5sum \$T /system/android/framework/oh-adapter-runtime.jar"

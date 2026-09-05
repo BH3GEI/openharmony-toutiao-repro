@@ -55,6 +55,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             throws RemoteException {
         ensureStubServices();
         ensurePackageManagerWrapped();
+        loadAlooperShim();
         startTlsBootstrap();
         startViewTreeDumper();
         super.attachApplication(app, startSeq);
@@ -76,6 +77,163 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
      * IActivityManager and wants to stay small, and keeping the TLS stack in its
      * own file means it can be iterated on without rebuilding this one.
      * ------------------------------------------------------------------ */
+
+    /* ------------------------------------------------------------------
+     * ALooper shim
+     *
+     * Toutiao's real network engine is cronet (libsscronet.so).  It never loads
+     * here, and OpenHarmony's musl linker says exactly why:
+     *
+     *   MUSL-LDSO: relocating failed: symbol not found.
+     *     dso=.../libsscronet.so  s=ALooper_prepare
+     *
+     * This adapter's libandroid.so exports 750 symbols but not one ALooper_*, and
+     * libsscronet.so imports five of them (prepare/acquire/release/addFd/removeFd).
+     * So System.loadLibrary("sscronet") throws, TTNet counts the failure in
+     * chromium_boot_failures, and after a few tries disables cronet permanently and
+     * falls back to okhttp -- which is why configuration traffic works over the TLS
+     * bridge while the article feed never arrives.
+     *
+     * libwlalooper.so supplies those five by forwarding to android::Looper in
+     * libutils, i.e. the same looper the Java MessageQueue drives.
+     *
+     * Loading it from here, rather than via LD_PRELOAD, is deliberate: preloading
+     * put it into appspawn-x itself, which then failed to start and no app could
+     * spawn at all.  Doing it in-process is scoped to this app, needs no config
+     * change and no reboot, and cannot take the runtime down with it.
+     * ------------------------------------------------------------------ */
+
+    private static volatile boolean sAlooperTried;
+
+    /**
+     * Candidate locations, most specific first.
+     *
+     * The app's own native library directories come first, and that ordering is
+     * the whole trick: this adapter's native loader only registers a linker
+     * namespace ("native dependency domain") for the app's own library paths, so
+     * loading the same file from /system/android/lib64 fails with
+     *     UnsatisfiedLinkError: no native dependency domain for ClassLoader
+     * even when the app's own ClassLoader is passed explicitly.  Sitting next to
+     * libsscronet.so puts the shim inside the domain that already works.
+     */
+    private static final String[] ALOOPER_SHIMS = {
+        "/data/app/el2/100/base/com.ss.android.article.news/app_librarian/"
+                + "default.version.6986727972/libwlalooper.so",
+        "/data/app/el1/bundle/public/com.ss.android.article.news/android/lib/"
+                + "arm64-v8a/libwlalooper.so",
+        "/system/android/lib64/libwlalooper.so",
+        "/data/pr03-74e6-portable/android/lib64/libwlalooper.so",
+    };
+
+    /**
+     * Load the shim into the *app's* linker namespace, on a background thread.
+     *
+     * A plain System.load() from this class fails with
+     *     UnsatisfiedLinkError: no native dependency domain for ClassLoader
+     * because the namespace is derived from the calling class's loader, and this
+     * jar's loader has none registered.  Runtime.nativeLoad() takes the loader
+     * explicitly, so passing the app's gives the library a real namespace.
+     *
+     * The app's ClassLoader does not exist yet at attachApplication, hence the
+     * poll.  There is room for it: measured from hilog, the app starts at
+     * 21:54:10.594 and cronet's first relocation failure is at 21:54:25.275 --
+     * about 14.7s of slack.
+     */
+    private static void loadAlooperShim() {
+        if (sAlooperTried) return;
+        sAlooperTried = true;
+        String path = null;
+        for (int i = 0; i < ALOOPER_SHIMS.length; i++) {
+            java.io.File f = new java.io.File(ALOOPER_SHIMS[i]);
+            if (f.isFile() && f.canRead()) { path = ALOOPER_SHIMS[i]; break; }
+        }
+        if (path == null) {
+            System.err.println("[WL-ALOOPER] no shim found in "
+                    + java.util.Arrays.toString(ALOOPER_SHIMS));
+            return;
+        }
+        final String so = path;
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                long t0 = System.currentTimeMillis();
+                for (int i = 0; i < 400; i++) {         // up to ~12s, polled fast
+                    ClassLoader cl = appClassLoader();
+                    if (cl != null) {
+                        String err = nativeLoad(so, cl);
+                        long ms = System.currentTimeMillis() - t0;
+                        if (err == null) {
+                            System.err.println("[WL-ALOOPER] loaded " + so
+                                    + " into the app namespace after " + ms
+                                    + "ms (supplies ALooper_* for libsscronet)");
+                        } else {
+                            System.err.println("[WL-ALOOPER] nativeLoad(" + so
+                                    + ") failed after " + ms + "ms: " + err);
+                        }
+                        return;
+                    }
+                    try { Thread.sleep(30); } catch (InterruptedException e) { return; }
+                }
+                System.err.println("[WL-ALOOPER] app ClassLoader never appeared; shim not loaded");
+            }
+        }, "wl-alooper");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * The app's own ClassLoader, or null if it does not exist yet.
+     *
+     * Prefer ActivityThread.mBoundApplication.info (the LoadedApk): it carries a
+     * usable ClassLoader well before Application is constructed, and the previous
+     * attempt -- which waited for currentApplication() -- only got one at ~11.8s
+     * against cronet's ~14.7s, far too close for comfort.
+     */
+    private static ClassLoader appClassLoader() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object cur = at.getMethod("currentActivityThread").invoke(null);
+            if (cur != null) {
+                Object bound = readField(at, cur, "mBoundApplication");
+                if (bound != null) {
+                    Object info = readField(bound.getClass(), bound, "info");
+                    if (info != null) {
+                        Object cl = info.getClass()
+                                .getMethod("getClassLoader").invoke(info);
+                        if (cl != null) return (ClassLoader) cl;
+                    }
+                }
+            }
+            Object app = at.getMethod("currentApplication").invoke(null);
+            if (app == null) return null;
+            return (ClassLoader) app.getClass().getMethod("getClassLoader").invoke(app);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * @return null on success, otherwise the linker's error message.  AOSP has
+     *         carried two signatures for this over the years; try both.
+     */
+    private static String nativeLoad(String path, ClassLoader loader) {
+        try {
+            Method m;
+            try {
+                m = Runtime.class.getDeclaredMethod("nativeLoad",
+                        String.class, ClassLoader.class);
+                m.setAccessible(true);
+                return (String) m.invoke(null, path, loader);
+            } catch (NoSuchMethodException e) {
+                m = Runtime.class.getDeclaredMethod("nativeLoad",
+                        String.class, ClassLoader.class, Class.class);
+                m.setAccessible(true);
+                return (String) m.invoke(null, path, loader,
+                        ActivityManagerRouting.class);
+            }
+        } catch (Throwable t) {
+            return String.valueOf(t);
+        }
+    }
 
     /* ---- TLS gate ----------------------------------------------------
      *
@@ -104,6 +262,8 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             new java.util.concurrent.CountDownLatch(1);
     /** The real JSSE provider, published by the bootstrap thread. */
     private static volatile java.security.Provider sRealJsse;
+    /** Our working trust manager, published alongside it. */
+    private static volatile javax.net.ssl.X509TrustManager sRealTrustManager;
     /** How long a caller will wait for the real stack before giving up. */
     private static final long TLS_WAIT_MS = 120000L;
 
@@ -126,6 +286,60 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         p = sRealJsse;
         if (p == null) throw new java.io.IOException("TLS provider unavailable");
         return p;
+    }
+
+    /**
+     * Android's Network Security Config trust manager, which cannot work here.
+     *
+     * okhttp asks the platform for its trust managers and hands whatever it gets
+     * to SSLContext.init().  On this adapter that is
+     * android.security.net.config.RootTrustManager, whose checkServerTrusted()
+     * builds a com.android.org.conscrypt.TrustManagerImpl -- a class the adapter
+     * does not ship.  The result, mid-handshake:
+     *
+     *   java.lang.NoSuchMethodError: No direct method
+     *     <init>(KeyStore;CertPinManager;ConscryptCertStore)V
+     *     in class Lcom/android/org/conscrypt/TrustManagerImpl;
+     *       at android.security.net.config.NetworkSecurityTrustManager.<init>
+     *       at android.security.net.config.RootTrustManager.checkServerTrusted
+     *       at okhttp3.internal.connection.RealConnection.connectTls
+     *
+     * That is an Error, not an Exception, so okhttp's `catch (Exception)` does not
+     * catch it; it unwinds through connectTls() whose finally-block does
+     * closeQuietly(sslSocket) -- surfacing as the user_canceled(90) alerts that
+     * killed nearly every app connection.
+     */
+    private static final String ANDROID_ROOT_TRUST_MANAGER =
+            "android.security.net.config.RootTrustManager";
+
+    /**
+     * Replace the platform trust manager with ours; leave anything else alone.
+     *
+     * A caller that brings its own anchors (certificate pinning, a private CA)
+     * must keep them, so only the known-broken platform one is substituted.
+     */
+    private static javax.net.ssl.TrustManager[] sanitizeTrustManagers(
+            javax.net.ssl.TrustManager[] tms) {
+        javax.net.ssl.X509TrustManager ours = sRealTrustManager;
+        if (ours == null) return tms;                 // nothing better to offer
+        if (tms == null || tms.length == 0) {
+            return new javax.net.ssl.TrustManager[] { ours };
+        }
+        javax.net.ssl.TrustManager[] out = null;
+        for (int i = 0; i < tms.length; i++) {
+            if (tms[i] == null) continue;
+            if (ANDROID_ROOT_TRUST_MANAGER.equals(tms[i].getClass().getName())) {
+                if (out == null) {
+                    out = new javax.net.ssl.TrustManager[tms.length];
+                    System.arraycopy(tms, 0, out, 0, tms.length);
+                }
+                out[i] = ours;
+                System.err.println("[WL-TLS] replaced " + ANDROID_ROOT_TRUST_MANAGER
+                        + " (needs conscrypt's TrustManagerImpl, absent here)"
+                        + " with the bridge's trust manager");
+            }
+        }
+        return out != null ? out : tms;
     }
 
     /** SSLContext.TLS: waits for the real provider, then is a plain delegate. */
@@ -161,7 +375,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             try {
                 javax.net.ssl.SSLContext c =
                         javax.net.ssl.SSLContext.getInstance("TLS", awaitRealJsse());
-                c.init(km, tm, sr);
+                c.init(km, sanitizeTrustManagers(tm), sr);
                 mDelegate = c;
             } catch (java.security.KeyManagementException e) {
                 throw e;
@@ -209,7 +423,13 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         private javax.net.ssl.TrustManagerFactory delegate() throws Exception {
             javax.net.ssl.TrustManagerFactory f = mDelegate;
             if (f == null) {
-                f = javax.net.ssl.TrustManagerFactory.getInstance("PKIX", awaitRealJsse());
+                // Wait for the stack, then resolve through the normal provider
+                // order rather than naming BouncyCastle: TlsBootstrap installs a
+                // front-end ahead of it that answers the platform-trust-anchor
+                // request from memory.  Asking BC directly would send it looking
+                // for a trust store file the board does not have.
+                awaitRealJsse();
+                f = javax.net.ssl.TrustManagerFactory.getInstance("PKIX");
                 mDelegate = f;
             }
             return f;
@@ -356,6 +576,8 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                     String status = (String) boot.getMethod("install").invoke(null);
                     sRealJsse = (java.security.Provider)
                             boot.getMethod("jsseProvider").invoke(null);
+                    sRealTrustManager = (javax.net.ssl.X509TrustManager)
+                            boot.getMethod("trustManager").invoke(null);
                     System.err.println("[WL-TLS] install: " + status
                             + " loadMs=" + (System.currentTimeMillis() - t0));
                     maybeSelfTest(boot);

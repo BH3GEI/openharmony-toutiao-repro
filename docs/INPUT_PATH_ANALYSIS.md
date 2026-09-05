@@ -214,14 +214,18 @@ hdc shell "echo 'dump'                       > /data/local/tmp/wl_input.cmd"   #
 
 实现要点：
 
-- 目标窗口取 `WindowManagerGlobal.mRoots` 中**最后一个** `mView != null` 且
-  `mInputEventReceiver != null` 的 `ViewRootImpl`（mRoots 按添加顺序，末尾在最上层）。
+- 目标窗口在 `WindowManagerGlobal.mRoots` 里**按秩选**，不是简单取最后一个：
+  已布局的应用窗口（`type < 1000` 且 `getWidth()/getHeight() > 0`）优先，
+  其次是有面积的子窗口，最后才是无面积的。**取最后一个是错的**——
+  被我们中和过的 PopupWindow（`type=1000`、`w=0`、surface 已释放）就排在末尾，
+  往它派发事件会被安静吞掉，日志一切正常而像素毫无变化。
 - `MotionEvent.obtain(JJIFFI)` 之后**必须 `setSource(SOURCE_TOUCHSCREEN)`**：
   `obtain` 留下的是 `SOURCE_UNKNOWN`，缺了 `SOURCE_CLASS_POINTER` 会被
   `ViewPostImeInputStage` 路由到 `processGenericMotionEvent`，视图树根本收不到。
 - 首选 `InputEventBridge.dispatchOnMainThread`（它自带 post 到主 looper）；
   取不到时回退到 `ViewRootImpl.enqueueInputEvent(InputEvent)` + 主线程 Handler。
-- 命令文件读完即删，避免某条命令卡住主线程后被反复重放。
+- 命令文件按 `(mtime, length)` 去重，不能只靠删除：shell 是以 root 身份写这个文件的,
+  app 通常既 unlink 不掉也 truncate 不了，早期版本因此把同一条命令重放了 753 次。
 - 无命令文件时线程只是每 150 ms 空转，**对既有行为零影响**。
 
 已验证存在于板端 `framework.jar` 的全部依赖 API：
@@ -235,10 +239,62 @@ android.view.ViewRootImpl.enqueueInputEvent(Landroid/view/InputEvent;)V         
 android.os.SystemClock.uptimeMillis()J                                            ✓
 ```
 
-产物：`amr/build/oh-adapter-runtime.input.jar`（`amr/build_amr.sh` 一条命令重建）。
+产物：`amr/build/oh-adapter-runtime.all.jar`。
 
-**这是测试夹具，不是 MMI 的替代品。** 它让 UI 能被脚本驱动、界面矩阵能采全，
+**这是测试夹具，不是 MMI 的替代品。** 它让事件能被投进视图树，
 但真实硬件触控仍然没有生产端。
+
+### 真机验证结果（2026-09-05）
+
+已与 S2 的 TLS 网关 + ALooper 加载合流为 `oh-adapter-runtime.all.jar`（见第 7 节），
+在板端实测：
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 泵启动 | ✅ | `[WL-INPUT] pump armed, watching /data/local/tmp/wl_input.cmd` |
+| 命令送达 | ✅ | 一条命令一次执行（早期版本因无法 unlink root 文件而重放了 753 次，已修） |
+| 投递到主窗口 | ✅ | `tap 320.0,213.0 -> ViewRootImpl(type=1 … ty=BASE_APPLICATION)` |
+| 进入真实视图树 | ✅ | `tapv 1050.0,1855.0 on com.android.internal.policy.DecorView -> down=true up=true` |
+| 界面切换 | ❌ | 见下 |
+
+**第一版打到了错窗口。** 最初 `topInputTarget()` 取 `mRoots` 的最后一项，
+拿到的是被我们中和过的 PopupWindow 子窗口（`type=1000`、`w=0`、surface 已释放），
+事件被安静吞掉。改成按「已布局的应用窗口 > 已布局的子窗口 > 无面积窗口」评分后，
+命中 `type=1 BASE_APPLICATION`。
+
+### 新发现的平台缺口：`VelocityTracker` 没有 native 实现
+
+事件确实进了视图树，但屏幕不变。`tapv` 直通路径把异常原样抛了出来：
+
+```
+java.lang.UnsatisfiedLinkError: No implementation found for
+    long android.view.VelocityTracker.nativeInitialize(int)
+  at android.view.VelocityTracker.nativeInitialize(Native Method)
+  at android.view.VelocityTracker.obtain(VelocityTracker.java:230)
+  at android.widget.HorizontalScrollView.initOrResetVelocityTracker(HorizontalScrollView.java:540)
+  at android.widget.HorizontalScrollView.onInterceptTouchEvent(HorizontalScrollView.java:641)
+  at android.view.ViewGroup.dispatchTouchEvent(ViewGroup.java:2654)
+```
+
+顶部频道行是一个 `HorizontalScrollView`。触摸一进入它，
+`onInterceptTouchEvent` 就要 `VelocityTracker.obtain()`，
+而这块板子的适配层**没有提供 `VelocityTracker` 的 JNI 实现**，于是整条
+`dispatchTouchEvent` 直接展开退栈。**任何可滚动容器都会这样**——
+频道行、`FeedCommonRecyclerView` 都用 `VelocityTracker`。
+
+这也解释了走 ViewRootImpl 的 `tap` 为什么「无声无息」：同一个
+`UnsatisfiedLinkError` 在 `ViewPostImeInputStage` 里被 ViewRootImpl 的
+阶段机制吞掉了，日志里什么都看不到。**事件一直是送到了的，死在 VelocityTracker。**
+
+底部导航（`tapv 1050 1855`）不在滚动容器里，所以不抛异常、`down=true up=true`，
+但同样没有可见变化——那是另一个待查项，不能与本条混为一谈。
+
+**修复方向**：`VelocityTracker` 是 BCP 类，ART 只在 **boot classloader** 的
+已加载库里找它的 JNI 符号，所以往 app 命名空间里塞 .so 没用。
+可行路线是编一个 arm64 小库导出 `Java_android_view_VelocityTracker_native*`
+（纯记账，速度返 0 即可，点击不需要真实速度），再用 S2 的
+`Runtime.nativeLoad(path, loader)` 手法以 **null（boot）loader** 注入。
+这是继 ICU、libnpth、ColorMatrix 之后的同一类缺口。
 
 ---
 
@@ -286,3 +342,50 @@ unzip -p /path/to/framework.jar classes4.dex > c4.dex   # 用 patches/tools 解�
 # 消费端是完整的
 strings -a liboh_android_runtime.so | grep 'dispatchInputEvent seq='
 ```
+
+
+---
+
+## 7. 与 TLS / ALooper 的合流
+
+板端的 `oh-adapter-runtime.jar` 不是原始版本：S2 在里面注入了 TLS 网关
+（`TlsGateSpi` / `hijackTlsShim`）和 `libwlalooper.so` 的动态加载。
+直接推自己的构建会把网络层打回原形，所以走三方合并：
+
+```
+amr/src/adapter/activity/
+  ActivityManagerRouting.java       首帧修复 + input pump
+  ActivityManagerRouting.tls.java   S2：首帧修复 + TLS 网关 + ALooper
+  ActivityManagerRouting.all.java   合流：三者齐全  ← 板端部署这一份
+```
+
+合并是纯增量的（`git merge-file` 零冲突，S2 那份相对公共基线**没有任何删除**）。
+构建：
+
+```bash
+JAVA_HOME=<jdk11+> \
+SRC=amr/src/adapter/activity/ActivityManagerRouting.all.java \
+OUT=amr/build/oh-adapter-runtime.all.jar amr/build_amr.sh
+```
+
+**合并结果是逐符号验证过的**，不是"看着像对"：
+
+- 用同一套脚本从 `.tls.java` 重建 S2 的 jar，dex 的方法集与字符串集
+  与板上那份**完全一致**（双向差集均为 0）；
+- `.all.jar` 相对 S2 的 jar 是**严格超集**：缺失 0 个方法 / 0 个字符串，
+  新增 26 个方法 / 73 个字符串（全部来自 input pump）。
+
+真机也确认三套逻辑同时在跑：
+
+```
+[WL-ALOOPER] loaded …/libwlalooper.so into the app namespace
+[WL-TLS] hijacked 'TlsShim' provider: 2 service(s) re-pointed at the gate
+[WL-INPUT] pump armed, watching /data/local/tmp/wl_input.cmd
+```
+
+顺带修掉两个构建脚本问题：`build_amr.sh` 用了 `mapfile`（bash 4+，macOS 跑不了，
+之前只做过 `bash -n` 所以没暴露），且只编译 routing 类一个文件——
+`src/android/net/ssl/SSLSockets.java` 因此从未被打进 jar。现在编译整个 `src/`。
+
+部署前板上那份已备份为
+`/data/pr03-74e6-portable/android/framework/oh-adapter-runtime.jar.s2-tls`。
