@@ -203,6 +203,22 @@ VelocityTracker + Theme 兜底 + SQLite shim + TLS 网关 + ALooper），四套�
 
 **只有推荐频道有真实内容**，其余频道走不同接口、仍返回空态——属内容层，不是输入或渲染问题。
 
+### Theme 兜底真机验收：**新 Activity 第一次真正上屏**
+
+`aa start com.bytedance.bdauditbase.teenmode.impl.ui.setting.TeenSettingActivity`：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| `[WL-WIN] addToDisplay` | **0**（窗口从未创建） | **1**（`type=1 BASE_APPLICATION`）|
+| 进程 | `alive=0`（启动即崩） | **`alive=1` 全程存活** |
+| 屏幕 | 81 KB（桌面）| **69.5 KB 完整设置页** |
+
+![](frames/screens/24-second-activity-settings.jpeg)
+
+返回箭头、标题「设置」、六个条目、底部「热线电话：957121」与
+「All Rights Reserved By Toutiao.com」全部渲染。
+**这条链路（第二个 Activity 完整拉起并上屏）到此打通。**
+
 ### `SearchActivity`：Theme 兜底生效，但撞到下一层
 
 `Theme.AppCompat` 崩溃**已消失**，启动推进到 `SearchFragment.onCreate`，
