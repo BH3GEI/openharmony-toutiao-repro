@@ -5,11 +5,16 @@ import android.app.IApplicationThread;
 import android.content.pm.ProviderInfo;
 import android.os.RemoteException;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStreamReader;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +61,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         ensureStubServices();
         ensurePackageManagerWrapped();
         startViewTreeDumper();
+        startInputPump();
         super.attachApplication(app, startSeq);
     }
 
@@ -100,6 +106,271 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         t.setDaemon(true);
         t.start();
         System.err.println("[WL-VIEWTREE] off-main probe armed (4 passes)");
+    }
+
+    /* ------------------------------------------------------------------
+     * Input delivery
+     *
+     * Touch never reaches the app on this adapter.  It builds the *consumer*
+     * half of an AOSP input path and leaves the producer half unimplemented
+     * (evidence in docs/INPUT_PATH_ANALYSIS.md):
+     *
+     *   - WindowSessionAdapter.addToDisplay opens a socketpair and calls
+     *     InputEventBridge.nativeRegisterInputChannel(session, channel);
+     *   - that JNI does GetMethodID(InputChannel, "getFd", "()I").  This
+     *     framework's android.view.InputChannel has no getFd, so the lookup
+     *     returns null and it logs "no-op, getFd not available" -- the session
+     *     is never registered, and the fd it would poll is never set either
+     *     (OHInputBridge::registerOHInputFd has zero call sites);
+     *   - OHInputBridge::subscribeMmi(int) is a bare `ret`, so the adapter
+     *     never subscribes to OH multimodal input in the first place;
+     *   - OHInputBridge::monitorOHInputEvents() polls the (always empty) fd
+     *     set and, on data, only logs "OH input event received: %zd bytes".
+     *
+     * Everything downstream of that socket is intact: liboh_android_runtime's
+     * OH_InputMotionWorker builds a MotionEvent and hands it to
+     * InputEventBridge.dispatchOnMainThread(receiver, seq, event), which
+     * reflects into InputEventReceiver.dispatchInputEvent -- the ordinary
+     * ViewRootImpl pipeline.  So we re-enter at exactly that point and
+     * synthesise events from a command file:
+     *
+     *     echo 'tap 400 250'                > /data/local/tmp/wl_input.cmd
+     *     echo 'swipe 600 1400 600 500 400' > /data/local/tmp/wl_input.cmd
+     *
+     * That drives the UI from the shell, which is what interface sampling
+     * needs.  It is not a substitute for MMI: real hardware input still has
+     * no producer, and supplying one is board-side work.
+     * ------------------------------------------------------------------ */
+
+    private static final String INPUT_CMD_FILE = "/data/local/tmp/wl_input.cmd";
+    private static final int ACTION_DOWN = 0;
+    private static final int ACTION_UP = 1;
+    private static final int ACTION_MOVE = 2;
+    private static final int SOURCE_TOUCHSCREEN = 0x00001002;
+
+    private static volatile boolean sInputPumpStarted;
+    private static volatile boolean sBridgeMissReported;
+    private static int sInputSeq = 1;
+
+    private static void startInputPump() {
+        if (sInputPumpStarted) return;
+        sInputPumpStarted = true;
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                File f = new File(INPUT_CMD_FILE);
+                while (true) {
+                    try { Thread.sleep(150); } catch (InterruptedException e) { return; }
+                    try {
+                        if (!f.isFile() || f.length() == 0) continue;
+                        List<String> lines = readLines(f);
+                        // Consume before running: a command that wedges the main
+                        // thread must not be replayed on every poll.
+                        f.delete();
+                        for (int i = 0; i < lines.size(); i++) {
+                            runInputCommand(lines.get(i).trim());
+                        }
+                    } catch (Throwable th) {
+                        System.err.println("[WL-INPUT] pump: " + th);
+                    }
+                }
+            }
+        }, "wl-input-pump");
+        t.setDaemon(true);
+        t.start();
+        System.err.println("[WL-INPUT] pump armed, watching " + INPUT_CMD_FILE);
+    }
+
+    private static List<String> readLines(File f) throws Exception {
+        List<String> out = new ArrayList<String>();
+        BufferedReader r = new BufferedReader(
+                new InputStreamReader(new FileInputStream(f), "UTF-8"));
+        try {
+            for (String s = r.readLine(); s != null; s = r.readLine()) {
+                if (s.trim().length() > 0) out.add(s);
+            }
+        } finally {
+            r.close();
+        }
+        return out;
+    }
+
+    private static void runInputCommand(String line) {
+        if (line.length() == 0 || line.charAt(0) == '#') return;
+        String[] a = line.split("\\s+");
+        try {
+            if ("tap".equals(a[0]) && a.length >= 3) {
+                injectTap(Float.parseFloat(a[1]), Float.parseFloat(a[2]));
+            } else if ("swipe".equals(a[0]) && a.length >= 5) {
+                int ms = a.length >= 6 ? Integer.parseInt(a[5]) : 300;
+                injectSwipe(Float.parseFloat(a[1]), Float.parseFloat(a[2]),
+                            Float.parseFloat(a[3]), Float.parseFloat(a[4]), ms);
+            } else if ("key".equals(a[0]) && a.length >= 2) {
+                injectKey(Integer.parseInt(a[1]));
+            } else if ("dump".equals(a[0])) {
+                dumpAllWindows(99);
+            } else {
+                System.err.println("[WL-INPUT] unknown command: " + line);
+            }
+        } catch (Throwable t) {
+            System.err.println("[WL-INPUT] '" + line + "' failed: " + t);
+        }
+    }
+
+    private static void injectTap(float x, float y) throws Exception {
+        Object vri = topInputTarget();
+        if (vri == null) {
+            System.err.println("[WL-INPUT] tap dropped: no window with an input receiver");
+            return;
+        }
+        long down = uptimeMillis();
+        dispatch(vri, motionEvent(down, down, ACTION_DOWN, x, y));
+        dispatch(vri, motionEvent(down, uptimeMillis(), ACTION_UP, x, y));
+        System.err.println("[WL-INPUT] tap " + x + "," + y + " -> " + describeTarget(vri));
+    }
+
+    private static void injectSwipe(float x1, float y1, float x2, float y2, int durationMs)
+            throws Exception {
+        Object vri = topInputTarget();
+        if (vri == null) {
+            System.err.println("[WL-INPUT] swipe dropped: no window with an input receiver");
+            return;
+        }
+        int steps = durationMs / 16;
+        if (steps < 4) steps = 4;
+        if (steps > 120) steps = 120;
+        long down = uptimeMillis();
+        dispatch(vri, motionEvent(down, down, ACTION_DOWN, x1, y1));
+        for (int i = 1; i <= steps; i++) {
+            float t = (float) i / steps;
+            try { Thread.sleep(durationMs / steps); } catch (InterruptedException ignored) {}
+            dispatch(vri, motionEvent(down, uptimeMillis(), ACTION_MOVE,
+                    x1 + (x2 - x1) * t, y1 + (y2 - y1) * t));
+        }
+        dispatch(vri, motionEvent(down, uptimeMillis(), ACTION_UP, x2, y2));
+        System.err.println("[WL-INPUT] swipe " + x1 + "," + y1 + " -> " + x2 + "," + y2
+                + " in " + steps + " steps -> " + describeTarget(vri));
+    }
+
+    private static void injectKey(int keyCode) throws Exception {
+        Object vri = topInputTarget();
+        if (vri == null) {
+            System.err.println("[WL-INPUT] key dropped: no window with an input receiver");
+            return;
+        }
+        Class<?> ke = Class.forName("android.view.KeyEvent");
+        java.lang.reflect.Constructor<?> ctor = ke.getConstructor(
+                long.class, long.class, int.class, int.class, int.class);
+        long down = uptimeMillis();
+        Object downEv = ctor.newInstance(down, down, ACTION_DOWN, keyCode, 0);
+        Object upEv = ctor.newInstance(down, uptimeMillis(), ACTION_UP, keyCode, 0);
+        setSource(ke, downEv, 0x00000101 /* SOURCE_KEYBOARD */);
+        setSource(ke, upEv, 0x00000101);
+        dispatch(vri, downEv);
+        dispatch(vri, upEv);
+        System.err.println("[WL-INPUT] key " + keyCode + " -> " + describeTarget(vri));
+    }
+
+    private static Object motionEvent(long downTime, long eventTime, int action, float x, float y)
+            throws Exception {
+        Class<?> me = Class.forName("android.view.MotionEvent");
+        Method obtain = me.getMethod("obtain", long.class, long.class, int.class,
+                float.class, float.class, int.class);
+        Object ev = obtain.invoke(null, downTime, eventTime, action, x, y, 0);
+        // obtain() leaves source at SOURCE_UNKNOWN; without SOURCE_CLASS_POINTER
+        // ViewPostImeInputStage routes to processGenericMotionEvent and the view
+        // hierarchy never sees the touch.
+        setSource(me, ev, SOURCE_TOUCHSCREEN);
+        return ev;
+    }
+
+    private static void setSource(Class<?> cls, Object event, int source) {
+        Method m = findMethod(cls, "setSource", int.class);
+        if (m == null) return;
+        try {
+            m.setAccessible(true);
+            m.invoke(event, source);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * Hand the event to the same entry point liboh_android_runtime's
+     * OH_InputMotionWorker uses, falling back to ViewRootImpl directly.
+     */
+    private static void dispatch(Object vri, Object event) throws Exception {
+        Object receiver = readFieldValue(vri, "mInputEventReceiver");
+        if (receiver != null) {
+            try {
+                Class<?> bridge = Class.forName("adapter.window.InputEventBridge");
+                Method m = bridge.getMethod("dispatchOnMainThread",
+                        Class.forName("android.view.InputEventReceiver"),
+                        int.class,
+                        Class.forName("android.view.InputEvent"));
+                m.invoke(null, receiver, sInputSeq++, event);
+                return;
+            } catch (Throwable t) {
+                if (!sBridgeMissReported) {
+                    sBridgeMissReported = true;
+                    System.err.println("[WL-INPUT] InputEventBridge.dispatchOnMainThread "
+                            + "unusable (" + t + "); using ViewRootImpl.enqueueInputEvent");
+                }
+            }
+        }
+        enqueueOnMain(vri, event);
+    }
+
+    private static void enqueueOnMain(final Object vri, final Object event) throws Exception {
+        final Method enqueue = findMethod(vri.getClass(), "enqueueInputEvent",
+                Class.forName("android.view.InputEvent"));
+        if (enqueue == null) {
+            System.err.println("[WL-INPUT] ViewRootImpl has no enqueueInputEvent(InputEvent)");
+            return;
+        }
+        enqueue.setAccessible(true);
+        Class<?> looperCls = Class.forName("android.os.Looper");
+        Object main = looperCls.getMethod("getMainLooper").invoke(null);
+        Class<?> handlerCls = Class.forName("android.os.Handler");
+        Object handler = handlerCls.getConstructor(looperCls).newInstance(main);
+        handlerCls.getMethod("post", Runnable.class).invoke(handler, new Runnable() {
+            @Override public void run() {
+                try {
+                    enqueue.invoke(vri, event);
+                } catch (Throwable t) {
+                    System.err.println("[WL-INPUT] enqueueInputEvent failed: " + t);
+                }
+            }
+        });
+    }
+
+    /** Topmost ViewRootImpl that still has a live view and an input receiver. */
+    private static Object topInputTarget() throws Exception {
+        Class<?> wmg = Class.forName("android.view.WindowManagerGlobal");
+        Object inst = wmg.getMethod("getInstance").invoke(null);
+        List<?> roots = (List<?>) readField(wmg, inst, "mRoots");
+        if (roots == null) return null;
+        // mRoots is in add order, so the last live entry is on top.
+        for (int i = roots.size() - 1; i >= 0; i--) {
+            Object vri = roots.get(i);
+            if (vri == null) continue;
+            if (readFieldValue(vri, "mView") == null) continue;
+            if (readFieldValue(vri, "mInputEventReceiver") == null) continue;
+            return vri;
+        }
+        return null;
+    }
+
+    private static String describeTarget(Object vri) {
+        Object lp = readFieldValue(vri, "mWindowAttributes");
+        return "ViewRootImpl(" + (lp == null ? "?" : describeLp(lp)) + ")";
+    }
+
+    private static long uptimeMillis() {
+        try {
+            return (Long) Class.forName("android.os.SystemClock")
+                    .getMethod("uptimeMillis").invoke(null);
+        } catch (Throwable t) {
+            return System.nanoTime() / 1000000L;
+        }
     }
 
     private static void dumpMainThreadStack(int pass) {

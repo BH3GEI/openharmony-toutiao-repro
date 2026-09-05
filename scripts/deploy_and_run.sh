@@ -6,6 +6,7 @@
 #   scripts/deploy_and_run.sh --run-only          # just launch + capture
 #   scripts/deploy_and_run.sh --apk path/to.apk   # override the apk
 #   scripts/deploy_and_run.sh --tls               # also push the TLS bridge payload
+#   scripts/deploy_and_run.sh --input             # adapter jar with wl-input-pump
 #
 # Everything is relative to the repo; the only host assumption is that `hdc`
 # talks to the board.  Override with:
@@ -27,10 +28,12 @@ TTTEXT="${TTTEXT:-$ROOT/prebuilts/libtttext_lite.patched.so}"
 
 RUN_ONLY=0
 WITH_TLS=0
+WITH_INPUT=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --run-only) RUN_ONLY=1; shift ;;
         --tls)      WITH_TLS=1; shift ;;
+        --input)    WITH_INPUT=1; shift ;;
         --apk)      APK="$2"; shift 2 ;;
         --jar)      JAR="$2"; shift 2 ;;
         -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
@@ -44,6 +47,19 @@ if [ "$WITH_TLS" = 1 ]; then
     # TLS gateway (ActivityManagerRouting.hijackTlsShim).
     [ "$APK" = "$ROOT/prebuilts/base.final6.apk" ] && APK="$ROOT/prebuilts/base.final7.apk"
     [ "$JAR" = "$ROOT/prebuilts/oh-adapter-runtime.jar" ] && JAR="$ROOT/prebuilts/oh-adapter-runtime.tls.jar"
+fi
+
+# --input needs the jar carrying wl-input-pump.  It is not a Release artifact:
+# build it locally, since it is the one piece you are likely to keep editing.
+if [ "$WITH_INPUT" = 1 ]; then
+    INPUT_JAR="$ROOT/amr/build/oh-adapter-runtime.input.jar"
+    if [ ! -f "$INPUT_JAR" ]; then
+        echo "missing $INPUT_JAR
+build it first:  JAVA_HOME=<jdk11+> OUT=amr/build/oh-adapter-runtime.input.jar amr/build_amr.sh" >&2
+        exit 1
+    fi
+    JAR="$INPUT_JAR"
+    [ "$WITH_TLS" = 1 ] && echo "note: --input overrides --tls's adapter jar (the pump jar has no TLS gateway)" >&2
 fi
 
 hdc() { if [ -n "${HDC_TARGET:-}" ]; then "$HDC" -t "$HDC_TARGET" "$@"; else "$HDC" "$@"; fi; }
@@ -148,6 +164,7 @@ succeed (see tls-bridge/README.md) but the feed is still empty -- TTNet cancels
 its own connections.  Either way the acceptance for this repo is the first frame:
 search bar, channel tabs and bottom nav rendered.
 
-Note: touch input is not delivered to the app on this adapter, so the UI cannot
-be driven by uinput -- see the acceptance matrix in README.md section 3.
+Note: OH multimodal input never delivers touch to the app on this adapter, so
+uinput cannot drive the UI -- see docs/INPUT_PATH_ANALYSIS.md.  Deploy with
+--input and use scripts/wl_input.sh to drive it from the shell instead.
 EOT

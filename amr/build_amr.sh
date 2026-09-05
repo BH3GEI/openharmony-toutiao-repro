@@ -53,7 +53,11 @@ echo "[2/4] compile ActivityManagerRouting"
 
 echo "[3/4] d8 merge with classes-retarget.dex"
 ( cd "$BUILD" && "$JAR" cf stubs.jar -C stubs . )
-mapfile -t CLASSES < <(find "$BUILD/src" -name '*.class')
+# No mapfile: macOS still ships bash 3.2.  Anonymous inner classes mean the
+# file list is not a fixed size, so collect it portably.
+CLASSES=()
+while IFS= read -r c; do CLASSES+=("$c"); done < <(find "$BUILD/src" -name '*.class')
+[ "${#CLASSES[@]}" -gt 0 ] || { echo "no classes compiled" >&2; exit 1; }
 "$D8" --release --min-api 30 \
     --classpath "$BUILD/stubs.jar" --lib "$BUILD/stubs.jar" \
     --output "$BUILD" \

@@ -123,6 +123,24 @@ PopupWindow「无 surface、无输入」是同一类问题（见 `docs/ROOT-CAUS
 > 该弹窗更可能是被 `PrivateApiLancetImpl.<clinit>` 或其它补丁改变了触发条件，
 > **不是**被点击接受的。
 
+**根因已定位**，见 **[`docs/INPUT_PATH_ANALYSIS.md`](docs/INPUT_PATH_ANALYSIS.md)**：
+适配层只造了输入链路的消费端，生产端整段不存在——
+`nativeRegisterInputChannel` 因为 `InputChannel` 没有 `getFd()` 而静默 no-op、
+`OHInputBridge::subscribeMmi()` 是一条 `ret`、监听线程拿到数据也只打日志、
+整个适配层从 `libmmi-client` 只导入设备枚举 API。
+「通道建好了」这条日志只对了一半：AOSP 侧的 socketpair 确实建好了，
+适配层侧的登记从未发生。
+
+消费端是完整的，所以我们从消费端重新接入（见 `amr/`，产物
+`oh-adapter-runtime.input.jar`）：
+
+```bash
+hdc shell "echo 'tap 400 250' > /data/local/tmp/wl_input.cmd"      # 或用 scripts/wl_input.sh
+```
+
+这让界面能被脚本驱动、矩阵能采全，但**不是 MMI 的替代品**：
+真实硬件触控仍需板端实现 `subscribeMmi()`。
+
 ### `aa start` 能拉起但不上屏
 
 `aa start` 对 972 个已声明 ability 有效（`start ability successfully`），
@@ -131,8 +149,9 @@ PopupWindow「无 surface、无输入」是同一类问题（见 `docs/ROOT-CAUS
 
 ### 结论
 
-**界面矩阵无法通过交互采样完成**，除非先打通输入投递。这是继 TLS 之后的第二个
-平台级缺口，优先级建议排在信息流内容之前——没有输入，App 只能看不能用。
+**本轮的界面矩阵无法通过交互采样完成**——`uinput` 那条路走不通，而且以后也走不通：
+硬件触控要贯通必须在适配层源码里实现 MMI 订阅（`docs/INPUT_PATH_ANALYSIS.md` 第 5 节）。
+`wl-input-pump` 绕开了这一层，让矩阵可以在下一轮补齐。
 
 
 ## 4. 快速验证（用 Release 预编译产物）
