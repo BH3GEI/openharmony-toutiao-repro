@@ -14,8 +14,12 @@
 # OH_InputMotionWorker would have handed them over.
 #
 # Requires an adapter jar built with the pump:
-#   JAVA_HOME=... OUT=amr/build/oh-adapter-runtime.input.jar amr/build_amr.sh
-#   scripts/deploy_and_run.sh --input
+#   JAVA_HOME=... SRC=amr/src/adapter/activity/ActivityManagerRouting.all.java \
+#       OUT=amr/build/oh-adapter-runtime.all.jar amr/build_amr.sh
+#   scripts/deploy_and_run.sh --all
+#
+# Also needs libwlveltrack.so in the app's native lib dir (native/veltrack/),
+# or the first touch on any scrolling container throws UnsatisfiedLinkError.
 #
 # Env:
 #   HDC        hdc binary or wrapper      (default: hdc)

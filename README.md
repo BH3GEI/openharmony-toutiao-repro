@@ -132,13 +132,13 @@ PopupWindow「无 surface、无输入」是同一类问题（见 `docs/ROOT-CAUS
 适配层侧的登记从未发生。
 
 消费端是完整的，所以我们从消费端重新接入（见 `amr/`，产物
-`oh-adapter-runtime.input.jar`）：
+`oh-adapter-runtime.all.jar`）：
 
 ```bash
-hdc shell "echo 'tap 400 250' > /data/local/tmp/wl_input.cmd"      # 或用 scripts/wl_input.sh
+scripts/wl_input.sh tapv 320 213     # 或 echo 到 /data/local/tmp/wl_input.cmd
 ```
 
-这让界面能被脚本驱动、矩阵能采全，但**不是 MMI 的替代品**：
+这让界面能被脚本驱动，但**不是 MMI 的替代品**：
 真实硬件触控仍需板端实现 `subscribeMmi()`。
 
 ### `aa start` 能拉起但不上屏

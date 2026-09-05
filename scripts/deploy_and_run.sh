@@ -177,5 +177,5 @@ search bar, channel tabs and bottom nav rendered.
 
 Note: OH multimodal input never delivers touch to the app on this adapter, so
 uinput cannot drive the UI -- see docs/INPUT_PATH_ANALYSIS.md.  Deploy with
---input and use scripts/wl_input.sh to drive it from the shell instead.
+--all and use scripts/wl_input.sh to drive it from the shell instead.
 EOT
