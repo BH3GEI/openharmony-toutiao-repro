@@ -1,5 +1,11 @@
 # A2OH Toutiao 攻坚协同白板 (WHITEBOARD)
 
+> **注意：本文是攻坚过程的历史记录**，里面出现的绝对路径（`/home/yao/…`、
+> `C:\Users\yao\…`、`yao-win` 等）是当时那台宿主机的实际情况，**仅供追溯，不是复现的前提**。
+> 可复现的入口全部在仓库根目录的 `README.md`，脚本一律走相对路径与
+> `JAVA_HOME` / `D8` / `OHOS_NDK` / `HDC` 环境变量。
+
+
 > 更新时间: 2026-09-04 11:05 (Supervisor 初始建立)
 > 协同模式: Supervisor (Cursor) & Worker (Cindy) 双 Agent 通宵协同
 

@@ -1,5 +1,11 @@
 # 今日头条 OpenHarmony 首帧复现记录
 
+> **注意：本文是攻坚过程的历史记录**，里面出现的绝对路径（`/home/yao/…`、
+> `C:\Users\yao\…`、`yao-win` 等）是当时那台宿主机的实际情况，**仅供追溯，不是复现的前提**。
+> 可复现的入口全部在仓库根目录的 `README.md`，脚本一律走相对路径与
+> `JAVA_HOME` / `D8` / `OHOS_NDK` / `HDC` 环境变量。
+
+
 **结论**：今日头条 `SplashActivity` 开屏画面（「看见更大的世界」+ 头条 Logo）已在 OpenHarmony 6.1.0.31 / DAYU200 上完整渲染上屏，冷启动可复现。
 
 - 验收截图：`frames/FIRSTFRAME-splash-clean.jpeg`（1200×1920，冷启后 t≈11s）
