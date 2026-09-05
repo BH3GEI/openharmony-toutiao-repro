@@ -71,6 +71,28 @@ DEX_PATCHES = {
     "classes15.dex": [
         (0x7D63FC, bytes([0x62, 0x02, 0xA4, 0x7E]), RETURN_VOID + NOP2,
          "ArticleMainActivity.delayInit()V: entry -> return-void ; nop"),
+        # X.3CD.a(AbsApplication)Ljava/io/File; -- the ad SDK's preload cache dir.
+        #
+        # It opens with X.4Yx.c() (Environment.getExternalStorageState()), and
+        # AOSP resolves that through getExternalDirs()[0].  This adapter exposes
+        # no external volumes, so that array is empty and the call throws
+        # ArrayIndexOutOfBoundsException: length=0; index=0.
+        #
+        # The damage is out of all proportion to the cause: the throw happens
+        # inside X.BdA.<clinit> (via PreloadTask on a background thread), so ART
+        # marks X.BdA erroneous forever, and every later touch of it -- including
+        # SearchHostImpl.onSearchFragmentCreate -- dies with NoClassDefFoundError.
+        # That is what kept SearchActivity from ever opening.
+        #
+        # The method already has the right fallback: when the state is not
+        # "mounted" it branches to Context.getCacheDir().  So just feed it the
+        # empty string instead of calling out to Environment at all --
+        #     invoke-static X.4Yx.c ; move-result-object v1   (8 bytes)
+        #  -> const-string v1, "" ; nop ; nop                 (8 bytes)
+        # -- and the existing not-mounted path takes it to getCacheDir().
+        (0x538C28, bytes([0x71, 0x00, 0x20, 0x51, 0x00, 0x00, 0x0C, 0x01]),
+         bytes([0x1A, 0x01, 0x00, 0x00]) + NOP2 * 2,
+         "X.3CD.a(): skip Environment.getExternalStorageState -> use getCacheDir fallback"),
     ],
     "classes16.dex": [
         (0x526E6E, bytes([0x39, 0x00, 0x5A, 0x00]), NOP2 * 2,

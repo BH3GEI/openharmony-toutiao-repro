@@ -199,7 +199,14 @@ VelocityTracker + Theme 兜底 + SQLite shim + TLS 网关 + ALooper），四套�
 | 11 | 关注 | ⚠️ 切换成功，内容空态 | ![](frames/screens/22-channel-guanzhu.jpeg) |
 | 12 | 热榜 | ⚠️ 切换成功，内容空态 | ![](frames/screens/21-feed-hotlist.jpeg) |
 | 13 | 本地 | ⚠️ 切换成功，内容空态 | ![](frames/screens/23-channel-local.jpeg) |
-| 14 | 视频 / 畅听频道 | ❌ **进程崩溃**：`InflateException … PullToRefreshSSWebView`，适配层没有 WebView | — |
+| 14 | **视频频道** | ✅ 切换成功（空态）| ![](frames/screens/26-channel-video.jpeg) |
+| 15 | **搜索主界面** | ✅ 见下（第 12 号补丁）| ![](frames/screens/25-search-activity.jpeg) |
+| 16 | **第二个 Activity**（设置页）| ✅ 完整渲染 | ![](frames/screens/24-second-activity-settings.jpeg) |
+
+> **视频 / 畅听频道有条件崩溃**：信息流**已加载真实内容**时切过去会打死进程——
+> `InflateException … Error inflating class com.ss.android.article.common.PullToRefreshSSWebView`。
+> 这两个频道由 WebView 承载（`android.webkit.WebView` 类在 framework.jar 里**是有的**，
+> 挂在更深处，未定位）。信息流为空时切过去只渲染空态，不崩。
 
 **只有推荐频道有真实内容**，其余频道走不同接口、仍返回空态——属内容层，不是输入或渲染问题。
 
@@ -219,7 +226,41 @@ VelocityTracker + Theme 兜底 + SQLite shim + TLS 网关 + ALooper），四套�
 「All Rights Reserved By Toutiao.com」全部渲染。
 **这条链路（第二个 Activity 完整拉起并上屏）到此打通。**
 
-### `SearchActivity`：Theme 兜底生效，但撞到下一层
+### `SearchActivity` 已打通（第 12 号补丁）
+
+Theme 修好之后，搜索页推进到 `SearchFragment.onCreate`，死在**一具早就凉了的尸体**上：
+
+```
+NoClassDefFoundError: X.BdA
+Caused by: ExceptionInInitializerError at com.ss.android.ad.init.PreloadTask.run
+Caused by: ArrayIndexOutOfBoundsException: length=0; index=0
+```
+
+顺着 `X.BdA.<clinit>` → `c()` → `X.3CD.a()` 查下去，第一条指令就是
+`X.4Yx.c()`（`Environment.getExternalStorageState()`）。AOSP 对它的实现是
+`getExternalDirs()[0]` —— **这块板子没有任何外部存储卷，数组是空的**，于是抛
+AIOOBE。`<clinit>` 一失败，ART 就把 `X.BdA` 永久标记为 erroneous，
+之后任何人碰它都变成 `NoClassDefFoundError`。搜索页只是第一个撞上的。
+
+`X.3CD.a()` **本身就带正确的兜底**：状态不是 `"mounted"` 时走
+`Context.getCacheDir()`。所以只要别去问 Environment 就行——等宽替换 8 字节：
+
+```
+invoke-static X.4Yx.c ; move-result-object v1     71 00 20 51 00 00 0c 01
+    ->  const-string v1, "" ; nop ; nop            1a 01 00 00 00 00 00 00
+```
+
+之后 `"".equals("mounted")` 为假，现成的分支把它带到 `getCacheDir()`。
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| `[WL-WIN] addToDisplay` | 0 | **1**（`type=1`, `adjust=pan`）|
+| 进程 | `alive=0` | **`alive=1` 全程** |
+| 屏幕 | 桌面 | **搜索页：返回箭头 + 输入框 +「搜索」按钮** |
+
+![](frames/screens/25-search-activity.jpeg)
+
+### `SearchActivity`：历史记录（已修复，保留供追溯）
 
 `Theme.AppCompat` 崩溃**已消失**，启动推进到 `SearchFragment.onCreate`，
 死在一个**早已被毒死的类**上：
