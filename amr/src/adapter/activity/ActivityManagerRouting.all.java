@@ -61,7 +61,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         ensureStubServices();
         ensurePackageManagerWrapped();
         loadVelocityTrackerShim();
-        loadAlooperShim();
+        loadNativeShims();
         startTlsBootstrap();
         startViewTreeDumper();
         startInputPump();
@@ -110,7 +110,83 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
      * change and no reboot, and cannot take the runtime down with it.
      * ------------------------------------------------------------------ */
 
-    private static volatile boolean sAlooperTried;
+    /* ------------------------------------------------------------------
+     * SQLite probe
+     *
+     * The app has launched many times and has not one database file, and
+     * liboh_android_runtime.so registers the android.database.sqlite JNI entry
+     * points while containing no SQLite engine at all (zero sqlite3_* symbols,
+     * zero PRAGMA/SQLITE_ strings, and no libsqlite*.so anywhere on the board).
+     *
+     * That makes "AppLog cannot create its event-queue database, so device
+     * registration never runs, so device_id stays empty and the feed is never
+     * requested" a strong inference -- but it is still an inference.  This turns
+     * it into a measurement: open a database in-process and report exactly what
+     * comes back, cause chain included, since an UnsatisfiedLinkError from the
+     * missing engine would be buried there.
+     *
+     * Gated behind a marker file; costs nothing on a normal run.
+     * ------------------------------------------------------------------ */
+
+    private static final String SQLITE_PROBE_MARKER = "/data/local/tmp/wl-sqlite-probe";
+
+    private static void probeSqlite() {
+        if (!new java.io.File(SQLITE_PROBE_MARKER).isFile()) return;
+        String path = "/data/app/el2/100/base/com.ss.android.article.news/databases/wl_probe.db";
+        try {
+            new java.io.File(path).getParentFile().mkdirs();
+        } catch (Throwable ignored) { }
+        try {
+            Class<?> db = Class.forName("android.database.sqlite.SQLiteDatabase");
+            Class<?> factory = Class.forName(
+                    "android.database.sqlite.SQLiteDatabase$CursorFactory");
+            Method m = db.getMethod("openOrCreateDatabase", String.class, factory);
+            Object handle = m.invoke(null, path, null);
+            System.err.println("[WL-SQLITE] openOrCreateDatabase OK -> " + handle);
+            try {
+                db.getMethod("execSQL", String.class)
+                  .invoke(handle, "CREATE TABLE IF NOT EXISTS wl_probe(x INTEGER)");
+                System.err.println("[WL-SQLITE] CREATE TABLE OK -- SQLite is functional");
+            } catch (Throwable t) {
+                System.err.println("[WL-SQLITE] execSQL failed: " + unwrap(t));
+            }
+        } catch (Throwable t) {
+            System.err.println("[WL-SQLITE] openOrCreateDatabase FAILED: " + unwrap(t));
+        }
+        // CursorWindow is a separate native surface.  nativeExecuteForCursorWindow
+        // has to write rows into one, and liboh_android_runtime.so exports only the
+        // registration entry point, not the android::CursorWindow accessors -- so
+        // whether CursorWindow works decides whether a SQLite shim can hand results
+        // back through it or has to own that side too.
+        try {
+            Class<?> cw = Class.forName("android.database.CursorWindow");
+            Object w = cw.getConstructor(String.class).newInstance("wl_probe");
+            Object ok = cw.getMethod("setNumColumns", int.class).invoke(w, 1);
+            System.err.println("[WL-CURSORWIN] CursorWindow works (setNumColumns -> " + ok + ")");
+            try { cw.getMethod("close").invoke(w); } catch (Throwable ignored) { }
+        } catch (Throwable t) {
+            System.err.println("[WL-CURSORWIN] CursorWindow FAILED: " + unwrap(t));
+        }
+    }
+
+    /** Full cause chain: the interesting failure is usually two levels down. */
+    private static String unwrap(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        Throwable c = t;
+        for (int i = 0; c != null && i < 6; i++) {
+            if (i > 0) sb.append("  <- caused by: ");
+            sb.append(c.getClass().getName()).append(": ").append(c.getMessage());
+            if (c instanceof java.lang.reflect.InvocationTargetException) {
+                c = ((java.lang.reflect.InvocationTargetException) c).getTargetException();
+            } else {
+                Throwable n = c.getCause();
+                c = (n == c) ? null : n;
+            }
+        }
+        return sb.toString();
+    }
+
+    private static volatile boolean sShimsTried;
 
     /**
      * Candidate locations, most specific first.
@@ -133,7 +209,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
     };
 
     /**
-     * Load the shim into the *app's* linker namespace, on a background thread.
+     * Load the native shims into the *app's* linker namespace, on a background thread.
      *
      * A plain System.load() from this class fails with
      *     UnsatisfiedLinkError: no native dependency domain for ClassLoader
@@ -142,49 +218,92 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
      * explicitly, so passing the app's gives the library a real namespace.
      *
      * The app's ClassLoader does not exist yet at attachApplication, hence the
-     * poll.  There is room for it: measured from hilog, the app starts at
-     * 21:54:10.594 and cronet's first relocation failure is at 21:54:25.275 --
-     * about 14.7s of slack.
+     * poll.
+     *
+     * SQLite is loaded first and unconditionally.  It used to run only inside the
+     * ALooper shim's success branch, which made the database engine depend on an
+     * experiment that has since been abandoned: sealed.child will not grant a
+     * locally loaded library the global symbol visibility cronet's dlopen needs
+     * (§2.36), so that file is usually absent now -- and the old early return on
+     * "no ALooper shim found" meant SQLite was never loaded at all.
+     *
+     * The ordering matters on its own account too.  Whoever opens the first
+     * database has to find the natives already registered, and AppLog does that
+     * early in Application start-up; losing that race would surface as the same
+     * UnsatisfiedLinkError this shim exists to remove.
      */
-    private static void loadAlooperShim() {
-        if (sAlooperTried) return;
-        sAlooperTried = true;
-        String path = null;
-        for (int i = 0; i < ALOOPER_SHIMS.length; i++) {
-            java.io.File f = new java.io.File(ALOOPER_SHIMS[i]);
-            if (f.isFile() && f.canRead()) { path = ALOOPER_SHIMS[i]; break; }
-        }
-        if (path == null) {
-            System.err.println("[WL-ALOOPER] no shim found in "
-                    + java.util.Arrays.toString(ALOOPER_SHIMS));
-            return;
-        }
-        final String so = path;
+    private static void loadNativeShims() {
+        if (sShimsTried) return;
+        sShimsTried = true;
         Thread t = new Thread(new Runnable() {
             @Override public void run() {
                 long t0 = System.currentTimeMillis();
                 for (int i = 0; i < 400; i++) {         // up to ~12s, polled fast
                     ClassLoader cl = appClassLoader();
                     if (cl != null) {
-                        String err = nativeLoad(so, cl);
-                        long ms = System.currentTimeMillis() - t0;
-                        if (err == null) {
-                            System.err.println("[WL-ALOOPER] loaded " + so
-                                    + " into the app namespace after " + ms
-                                    + "ms (supplies ALooper_* for libsscronet)");
-                        } else {
-                            System.err.println("[WL-ALOOPER] nativeLoad(" + so
-                                    + ") failed after " + ms + "ms: " + err);
-                        }
+                        System.err.println("[WL-SHIM] app ClassLoader after "
+                                + (System.currentTimeMillis() - t0) + "ms");
+                        loadSqliteShim(cl);
+                        probeSqlite();
+                        loadAlooperShim(cl);
                         return;
                     }
                     try { Thread.sleep(30); } catch (InterruptedException e) { return; }
                 }
-                System.err.println("[WL-ALOOPER] app ClassLoader never appeared; shim not loaded");
+                System.err.println("[WL-SHIM] app ClassLoader never appeared; no shim loaded");
             }
-        }, "wl-alooper");
+        }, "wl-shims");
         t.setDaemon(true);
         t.start();
+    }
+
+    /**
+     * Best-effort ALooper_* provider for libsscronet.
+     *
+     * Loaded only if the file happens to be deployed, and its failure is not
+     * allowed to affect anything else.  It cannot actually rescue cronet -- a
+     * locally loaded library's symbols are not visible to a later dlopen in this
+     * namespace -- so this is kept only so a deployed copy still gets a chance
+     * and reports what happened.
+     */
+    private static void loadAlooperShim(ClassLoader cl) {
+        for (int i = 0; i < ALOOPER_SHIMS.length; i++) {
+            java.io.File f = new java.io.File(ALOOPER_SHIMS[i]);
+            if (!f.isFile() || !f.canRead()) continue;
+            String err = nativeLoad(ALOOPER_SHIMS[i], cl);
+            System.err.println("[WL-ALOOPER] load " + ALOOPER_SHIMS[i]
+                    + (err == null ? " OK" : " FAILED: " + err));
+            return;
+        }
+    }
+
+    /** Candidate locations for the SQLite JNI shim, app dirs first. */
+    private static final String[] SQLITE_SHIMS = {
+        "/data/app/el2/100/base/com.ss.android.article.news/app_librarian/"
+                + "default.version.6986727972/libwlsqlite.so",
+        "/data/app/el1/bundle/public/com.ss.android.article.news/android/lib/"
+                + "arm64-v8a/libwlsqlite.so",
+    };
+
+    /**
+     * Load the SQLite JNI shim with the app's ClassLoader.
+     *
+     * Its JNI_OnLoad attaches natives to android.database.sqlite.SQLiteConnection
+     * through RegisterNatives.  Unlike symbol resolution for a later dlopen -- the
+     * thing that defeated the ALooper shim -- RegisterNatives works fine from a
+     * locally loaded library, so the namespace limits in section 2.36 do not apply.
+     */
+    private static void loadSqliteShim(ClassLoader cl) {
+        for (int i = 0; i < SQLITE_SHIMS.length; i++) {
+            java.io.File f = new java.io.File(SQLITE_SHIMS[i]);
+            if (!f.isFile() || !f.canRead()) continue;
+            String err = nativeLoad(SQLITE_SHIMS[i], cl);
+            System.err.println("[WL-SQLITE] load " + SQLITE_SHIMS[i]
+                    + (err == null ? " OK" : " FAILED: " + err));
+            return;
+        }
+        System.err.println("[WL-SQLITE] no shim found in "
+                + java.util.Arrays.toString(SQLITE_SHIMS));
     }
 
     /**

@@ -182,6 +182,43 @@ MMI 订阅（`docs/INPUT_PATH_ANALYSIS.md` 第 5 节）。但绕开它之后，*
 | 8 | 未登录 / 我的 | `tap 1050 1870` | ❌ 无变化（见下） | — |
 | 9 | 顶部搜索框 | `tap 517 113` | ❌ 无变化（见下） | — |
 
+### 2026-09-06：真实新闻流上屏
+
+S2 打通 SQLite + TLS 后，`ActivityManagerRouting` 合流为单一 jar（输入泵 + 窗口按秩选 +
+VelocityTracker + Theme 兜底 + SQLite shim + TLS 网关 + ALooper），四套日志同时在跑：
+
+```
+[WL-INPUT] pump armed …        [WL-VELTRACK] self-test OK …
+[WL-SQLITE] JNI_OnLoad: CursorWindow=OK SQLiteConnection=OK
+[WL-THEME] parsed …/base.apk: 780 activity themes, application theme=0x7f0900…
+```
+
+| # | 界面 | 结果 | 截图 |
+|---|---|---|---|
+| 10 | **推荐 · 真实信息流** | ✅ **182 KB**（空页时只有 71 KB）：置顶 3 条带来源与评论数、环球网 1142 赞、人民网 1024 赞、图文卡片带真实配图 | ![](frames/screens/20-feed-recommend-live.jpeg) |
+| 11 | 关注 | ⚠️ 切换成功，内容空态 | ![](frames/screens/22-channel-guanzhu.jpeg) |
+| 12 | 热榜 | ⚠️ 切换成功，内容空态 | ![](frames/screens/21-feed-hotlist.jpeg) |
+| 13 | 本地 | ⚠️ 切换成功，内容空态 | ![](frames/screens/23-channel-local.jpeg) |
+| 14 | 视频 / 畅听频道 | ❌ **进程崩溃**：`InflateException … PullToRefreshSSWebView`，适配层没有 WebView | — |
+
+**只有推荐频道有真实内容**，其余频道走不同接口、仍返回空态——属内容层，不是输入或渲染问题。
+
+### `SearchActivity`：Theme 兜底生效，但撞到下一层
+
+`Theme.AppCompat` 崩溃**已消失**，启动推进到 `SearchFragment.onCreate`，
+死在一个**早已被毒死的类**上：
+
+```
+NoClassDefFoundError: X.BdA          ← <clinit> 失败过，类被永久标记 erroneous
+Caused by: ExceptionInInitializerError
+  at com.ss.android.ad.init.PreloadTask.run      ← 广告 SDK 预加载，后台线程
+Caused by: ArrayIndexOutOfBoundsException: length=0; index=0
+```
+
+`X.BdA.<clinit>` 第二条指令就是 `c()` → `new File(X.3CD.a(ctx), "search_preload")`，
+AIOOBE 出在 `X.3CD.a` —— 典型是 `getExternalFilesDirs()[0]` 这类**适配层返回空数组**的 API。
+真凶是那个后台广告预加载任务，搜索页只是第一个撞上尸体的。
+
 ### 第 8、9 项为什么还不行
 
 **不是投递问题。** 坐标经绝对矩形核对无误（`MainTabIndicator abs=[900,1821][1200,1920]`、
