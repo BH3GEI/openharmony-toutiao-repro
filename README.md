@@ -445,3 +445,70 @@ docs/WORKLOG.md            攻坚过程流水（含被证伪的路线，避免�
 
 Release 中的 `base.final6.apk` 与 `oh-adapter-runtime.jar` 属于第三方/内部产物，
 仅供本项目的复现验证，请勿再分发。仓库自身的脚本与源码按 MIT 使用。
+
+---
+
+## 9. 四靶标专项修复（2026-09-06）
+
+以 `frames/screens/` 真实截图暴露的四个缺陷为靶标。
+
+### 靶标 D · WebView 闪退 —— **已修复** ✅
+
+`WebViewFactory` 门面层加保护性代理。板端探针先证明症状不是"缺 provider"：
+
+```
+[WL-PROBE] WebViewFactory.getProvider() -> OK: com.bytedance.lynx.webview.glue.TTWebProviderWrapper
+[WL-PROBE] new WebView(context) -> NullPointerException at TTWebProviderWrapper.createWebView
+```
+
+`getProvider()` 成功，为 null 的是 TTWeb **内部**的 chromium 内核；NPE 从 `View.<init>`
+逃出来，所以任何含 `PullToRefreshSSWebView` 的布局一 inflate 就带走整个进程。
+
+做法：把 provider 包一层 `Proxy`，`createWebView` 抛异常时改为交回惰性
+`WebViewProvider`，接口类型返回值递归代理（否则 NPE 只是被推迟到
+`getViewDelegate()`）。**guard 必须在主线程安装**——后台线程调 `getProvider()` 会抛。
+
+| 动作 | 修复前 | 修复后 |
+|---|---|---|
+| `new WebView(context)` | NPE | **OK `android.webkit.WebView{51f3024 VFE.HV...}`** |
+| 点视频频道 | `InflateException` → 进程死 | 画面 179774→**76707 真正切换**，进程存活 |
+| 点详情卡片 | 闪退 | 进程存活 |
+
+![](frames/screens/26_fixed_webview_video.jpeg)
+
+### 靶标 A · 图片灰框 —— **是加载时序，不是测量失真**
+
+同卡片前后对比即可判定：27 号图里环球网/人民网台标是灰圆、郭富城卡片是大灰框；
+[`20_fixed_image.jpeg`](frames/screens/20_fixed_image.jpeg) 里**台标与真实照片都完整加载**，
+连续 4 次采样帧稳定在 179 KB（灰框态 141 KB）。
+
+**未观察到"横向挤压变形"**，照片人物比例正常，因此没有去改 DecorView 的
+DisplayMetrics 注入——那会是在没有缺陷的地方动刀。
+
+### 靶标 B / C · 搜索页死白 与 频道"网络异常" —— **同一个根因，不在 UI 层**
+
+搜索页现已能正常拉起上屏，控件树说明一切：
+
+```
+SearchAutoCompleteTextView  VISIBLE   898x80   abs=[167,68][1065,148]    ← 顶栏正常
+RecyclerView                INVISIBLE          abs=[0,162][1200,1920]    ← 列表无数据
+TTLoadingViewV2             GONE
+TTNoButtonErrorViewV2       GONE                                         ← 连错误态都没显示
+```
+
+列表尺寸 1200x1758 正确，**不是测量问题，是数据从未到达**。根因在设备身份：
+
+- `shared_prefs` 里 **`device_id` / `install_id` 一条都没有**（设备从未注册成功）
+- 抓包解压后（响应体是 gzip），`api.toutiaoapi.com` 同一会话**连续 5 次**返回
+  `{"base_resp":{"status_code":400,"status_message":"invalid user"}}`
+- 同进程 `isaas.ecombdapi.com` 返回 `status_code:0 success` —— **网络栈与 TLS 没问题**
+
+**推荐频道之所以有内容，是因为它渲染的是 `news_article.db`（909 KB）里的缓存**，
+不是实时拉取：那一轮整个进程只建立了 2 条 TLS 连接却出了完整信息流。
+
+所以 B 与 C 要么打通设备注册（网络/指纹层），要么承认是缓存之外的能力边界。
+**未在 UI 层做假修复。**
+
+> 采样提示：冷启动 50–80 s 后进程自行消失与内存强相关（重启后 5.0 GB 空闲时稳定，
+> 连跑数轮掉到 0.95 GB 即开始失败）。**采样前重启板子**，`reboot` 后
+> `pr03-boot-recovery.txt` 自动回到 `state=READY`。
