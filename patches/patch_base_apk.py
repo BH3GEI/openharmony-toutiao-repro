@@ -115,6 +115,22 @@ DEX_PATCHES = {
     "classes20.dex": [
         (0x70BA6C, bytes([0x62, 0x03, 0xB6, 0x62]), RETURN_VOID + NOP2,
          "PrivateApiLancetImpl.<clinit>: entry -> return-void ; nop"),
+        # X.BdA.<clinit> stops calling c().
+        #
+        #   new BdA(); sput a
+        #   invoke-direct BdA->c(); move-result-object v0; sput v0 -> b:File
+        #
+        # c() builds new File(X.3CD.a(ctx), "search_preload"), and X.3CD.a throws
+        # ArrayIndexOutOfBoundsException(length=0; index=0) here -- an empty array
+        # out of one of the storage-dir APIs.  A failed <clinit> marks the class
+        # erroneous permanently, so SearchFragment.onCreate later dies with
+        # NoClassDefFoundError: X.BdA and takes the process with it.  Drop the call
+        # and leave the field null; storing null in a File field is type-safe,
+        # unlike leaving the BdA instance v0 held before.
+        (0x5FCA16,
+         bytes([0x70, 0x10, 0xA9, 0x58, 0x00, 0x00, 0x0C, 0x00]),
+         bytes([0x12, 0x00]) + NOP2 * 3,
+         "X.BdA.<clinit>: invoke c() ; move-result -> const/4 v0,#0 ; nop x3"),
     ],
 }
 

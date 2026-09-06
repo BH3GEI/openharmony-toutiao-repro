@@ -369,6 +369,8 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 injectTapDirect(Float.parseFloat(a[1]), Float.parseFloat(a[2]));
             } else if ("key".equals(a[0]) && a.length >= 2) {
                 injectKey(Integer.parseInt(a[1]));
+            } else if ("stack".equals(a[0])) {
+                dumpMainThreadStack(0);
             } else if ("dump".equals(a[0])) {
                 dumpAllWindows(99);
             } else {
@@ -678,10 +680,29 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             @Override public Object invoke(Object p, Method m, Object[] args) {
                 Class<?> ret = m.getReturnType();
                 if (ret.isInterface()) return inertProxy(ret, depth + 1);
+                // Known boundary: java.lang.reflect.Proxy only implements
+                // interfaces, so an abstract *class* return type (the one that
+                // matters here is android.webkit.WebSettings, handed out by
+                // WebViewProvider.getSettings()) can only be answered with null.
+                // Callers that dereference it -- e.g.
+                // MediaAppUtil.getWebViewDefaultUserAgent() ->
+                // getSettings().getUserAgentString() -- still NPE, so those call
+                // sites are neutralised in the app dex instead (see
+                // patches/patch_base_apk.py, classes21.dex).  Say so once rather
+                // than fail silently.
+                if (!ret.isPrimitive() && ret != Void.TYPE
+                        && java.lang.reflect.Modifier.isAbstract(ret.getModifiers())
+                        && !sInertAbstractReported) {
+                    sInertAbstractReported = true;
+                    System.err.println("[WL-WEBVIEW] " + m.getName() + " returns abstract "
+                            + ret.getName() + "; cannot synthesise one, returning null");
+                }
                 return defaultValue(ret);
             }
         });
     }
+
+    private static volatile boolean sInertAbstractReported;
 
     /**
      * Report the device-identity values the app's device_register uses.
