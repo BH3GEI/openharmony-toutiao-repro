@@ -360,6 +360,10 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 int ms = a.length >= 6 ? Integer.parseInt(a[5]) : 300;
                 injectSwipe(Float.parseFloat(a[1]), Float.parseFloat(a[2]),
                             Float.parseFloat(a[3]), Float.parseFloat(a[4]), ms);
+            } else if ("fingerprint".equals(a[0])) {
+                probeFingerprint();
+            } else if ("webview".equals(a[0])) {
+                probeWebView();
             } else if ("tapv".equals(a[0]) && a.length >= 3) {
                 injectTapDirect(Float.parseFloat(a[1]), Float.parseFloat(a[2]));
             } else if ("key".equals(a[0]) && a.length >= 2) {
@@ -557,6 +561,133 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 }
             }
         });
+    }
+
+    /**
+     * Report the device-identity values the app's device_register uses.
+     *
+     * 热榜 / 关注 come back empty while 推荐 works, and the suspicion is that
+     * device registration cannot produce a fingerprint.  Rather than inject
+     * plausible-looking values blind, ask what each source actually returns:
+     *
+     *     echo fingerprint > /data/local/tmp/wl_input.cmd
+     */
+    private static void probeFingerprint() throws Exception {
+        runOnMain(new Runnable() {
+            @Override public void run() {
+                final Object app;
+                try {
+                    app = Class.forName("android.app.ActivityThread")
+                            .getMethod("currentApplication").invoke(null);
+                } catch (Throwable t) {
+                    System.err.println("[WL-FP] no Application: " + t);
+                    return;
+                }
+                report("Settings.Secure android_id", new Probe() {
+                    @Override public Object call() throws Exception {
+                        Object cr = app.getClass().getMethod("getContentResolver").invoke(app);
+                        Class<?> sec = Class.forName("android.provider.Settings$Secure");
+                        Method m = sec.getMethod("getString",
+                                Class.forName("android.content.ContentResolver"), String.class);
+                        return m.invoke(null, cr, "android_id");
+                    }
+                });
+                String[][] buildFields = {
+                    {"SERIAL", "android.os.Build"}, {"MODEL", "android.os.Build"},
+                    {"BRAND", "android.os.Build"}, {"DEVICE", "android.os.Build"},
+                    {"FINGERPRINT", "android.os.Build"}, {"MANUFACTURER", "android.os.Build"},
+                };
+                for (int i = 0; i < buildFields.length; i++) {
+                    final String fn = buildFields[i][0];
+                    final String cn = buildFields[i][1];
+                    report("Build." + fn, new Probe() {
+                        @Override public Object call() throws Exception {
+                            Field f = Class.forName(cn).getField(fn);
+                            return f.get(null);
+                        }
+                    });
+                }
+                final String[] tmCalls = { "getDeviceId", "getSubscriberId", "getSimSerialNumber",
+                                           "getNetworkOperator", "getSimOperator" };
+                for (int i = 0; i < tmCalls.length; i++) {
+                    final String call = tmCalls[i];
+                    report("TelephonyManager." + call, new Probe() {
+                        @Override public Object call() throws Exception {
+                            Object tm = app.getClass().getMethod("getSystemService", String.class)
+                                    .invoke(app, "phone");
+                            if (tm == null) return "<no phone service>";
+                            Method m = tm.getClass().getMethod(call);
+                            m.setAccessible(true);
+                            return m.invoke(tm);
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    /**
+     * Ask the framework, on the main thread, exactly why WebView is unavailable.
+     *
+     * The article detail pages and the 视频 / 畅听 channels are WebView-backed and
+     * fail with a bare "Error inflating class …PullToRefreshSSWebView" whose real
+     * cause sits several frames down, and only surfaces when the feed happens to
+     * have content.  This asks the question directly and deterministically:
+     *
+     *     echo webview > /data/local/tmp/wl_input.cmd
+     */
+    private static void probeWebView() throws Exception {
+        runOnMain(new Runnable() {
+            @Override public void run() {
+                report("WebViewFactory.getProvider()", new Probe() {
+                    @Override public Object call() throws Exception {
+                        Class<?> f = Class.forName("android.webkit.WebViewFactory");
+                        Method m = f.getDeclaredMethod("getProvider");
+                        m.setAccessible(true);
+                        return m.invoke(null);
+                    }
+                });
+                report("new WebView(context)", new Probe() {
+                    @Override public Object call() throws Exception {
+                        Class<?> at = Class.forName("android.app.ActivityThread");
+                        Object app = at.getMethod("currentApplication").invoke(null);
+                        Class<?> wv = Class.forName("android.webkit.WebView");
+                        return wv.getConstructor(Class.forName("android.content.Context"))
+                                 .newInstance(app);
+                    }
+                });
+            }
+        });
+    }
+
+    private interface Probe { Object call() throws Exception; }
+
+    /** Run one probe and print its whole cause chain -- the buried frame is the point. */
+    private static void report(String what, Probe c) {
+        try {
+            Object r = c.call();
+            System.err.println("[WL-PROBE] " + what + " -> OK: " + r);
+        } catch (Throwable t) {
+            int depth = 0;
+            for (Throwable e = t; e != null && depth < 6; e = causeOf(e), depth++) {
+                System.err.println("[WL-WEBVIEW] " + what
+                        + (depth == 0 ? " -> " : "   caused by: ") + e);
+                StackTraceElement[] st = e.getStackTrace();
+                int n = st.length > 6 ? 6 : st.length;
+                for (int i = 0; i < n; i++) {
+                    System.err.println("[WL-WEBVIEW]     at " + st[i]);
+                }
+            }
+        }
+    }
+
+    private static Throwable causeOf(Throwable t) {
+        if (t instanceof InvocationTargetException) {
+            Throwable x = ((InvocationTargetException) t).getTargetException();
+            if (x != null) return x;
+        }
+        Throwable x = t.getCause();
+        return (x == t) ? null : x;
     }
 
     /**
@@ -873,7 +1004,90 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             System.err.println("[WL-AMR] own authority " + name + " -> local install");
             return holder;
         }
-        return super.getContentProvider(caller, callingPackage, name, userId, stable);
+        ContentProviderHolder holder = super.getContentProvider(
+                caller, callingPackage, name, userId, stable);
+        if ("settings".equals(name)) {
+            holder = wrapSettingsProvider(holder);
+        }
+        return holder;
+    }
+
+    /* ------------------------------------------------------------------
+     * ANDROID_ID
+     *
+     * Probed on device: Settings.Secure.getString(cr, "android_id") returns
+     * null here, while Build.* and TelephonyManager.* all answer normally.  The
+     * app's device_register needs a stable device id, and a null one is a
+     * plausible reason 热榜 / 关注 come back empty while 推荐 works.
+     *
+     * Settings.Secure reads through the "settings" provider, and that provider
+     * is acquired via IActivityManager.getContentProvider -- which is this
+     * class.  So wrap the provider that comes back and answer the one query it
+     * is failing, rather than reaching into Settings' private cache.
+     *
+     * The value is a fixed, well-formed 16-hex-digit id: stable across runs
+     * (device_register would reject a value that changes every launch) and
+     * obviously synthetic.
+     * ------------------------------------------------------------------ */
+
+    private static final String FAKE_ANDROID_ID = "a1b2c3d4e5f60718";
+    private static volatile boolean sAndroidIdReported;
+
+    private static ContentProviderHolder wrapSettingsProvider(ContentProviderHolder holder) {
+        if (holder == null) {
+            System.err.println("[WL-FP] settings provider holder is null; ANDROID_ID stays unset");
+            return null;
+        }
+        try {
+            Field pf = findField(holder.getClass(), "provider");
+            if (pf == null) return holder;
+            pf.setAccessible(true);
+            final Object real = pf.get(holder);
+            if (real == null) {
+                System.err.println("[WL-FP] settings holder has no provider; ANDROID_ID stays unset");
+                return holder;
+            }
+            Class<?> icp = Class.forName("android.content.IContentProvider");
+            Object proxy = Proxy.newProxyInstance(icp.getClassLoader(),
+                    new Class<?>[] { icp }, new InvocationHandler() {
+                @Override public Object invoke(Object p, Method m, Object[] args) throws Throwable {
+                    if ("call".equals(m.getName()) && args != null && wantsAndroidId(args)) {
+                        Class<?> bundleCls = Class.forName("android.os.Bundle");
+                        Object b = bundleCls.getConstructor().newInstance();
+                        bundleCls.getMethod("putString", String.class, String.class)
+                                .invoke(b, "value", FAKE_ANDROID_ID);
+                        if (!sAndroidIdReported) {
+                            sAndroidIdReported = true;
+                            System.err.println("[WL-FP] answering settings android_id = "
+                                    + FAKE_ANDROID_ID);
+                        }
+                        return b;
+                    }
+                    try {
+                        return m.invoke(real, args);
+                    } catch (InvocationTargetException e) {
+                        throw e.getCause() != null ? e.getCause() : e;
+                    }
+                }
+            });
+            pf.set(holder, proxy);
+            System.err.println("[WL-FP] settings provider wrapped for android_id");
+        } catch (Throwable t) {
+            System.err.println("[WL-FP] could not wrap settings provider: " + t);
+        }
+        return holder;
+    }
+
+    /**
+     * IContentProvider.call has had several signatures across API levels, so match
+     * on the payload rather than the position: it is a settings GET whose argument
+     * names android_id.
+     */
+    private static boolean wantsAndroidId(Object[] args) {
+        for (int i = 0; i < args.length; i++) {
+            if ("android_id".equals(args[i])) return true;
+        }
+        return false;
     }
 
     // ---- 1. app's own providers -------------------------------------------------
