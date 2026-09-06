@@ -369,6 +369,8 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 injectTapDirect(Float.parseFloat(a[1]), Float.parseFloat(a[2]));
             } else if ("key".equals(a[0]) && a.length >= 2) {
                 injectKey(Integer.parseInt(a[1]));
+            } else if ("click".equals(a[0]) && a.length >= 3) {
+                performClickAt(Float.parseFloat(a[1]), Float.parseFloat(a[2]));
             } else if ("stack".equals(a[0])) {
                 dumpMainThreadStack(0);
             } else if ("dump".equals(a[0])) {
@@ -509,6 +511,130 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         Class<?> handlerCls = Class.forName("android.os.Handler");
         Object handler = handlerCls.getConstructor(looperCls).newInstance(main);
         handlerCls.getMethod("post", Runnable.class).invoke(handler, r);
+    }
+
+
+    /**
+     * Click whatever is under (x, y) by calling performClick(), not by touch.
+     *
+     * The feed is the case that needs this.  Its item roots report
+     * isClickable()==false -- Toutiao binds the article tap somewhere other than
+     * a plain View.OnClickListener -- so a synthesised MotionEvent lands on the
+     * right pixels and nothing navigates.  performClick() fires whatever
+     * listener is actually attached, and if the hit view has none we walk up its
+     * parents until one reports it handled the click.
+     */
+    private static void performClickAt(final float x, final float y) throws Exception {
+        Object vri = topInputTarget();
+        if (vri == null) {
+            System.err.println("[WL-INPUT] click dropped: no window");
+            return;
+        }
+        final Object root = readFieldValue(vri, "mView");
+        if (root == null) {
+            System.err.println("[WL-INPUT] click dropped: no decor view");
+            return;
+        }
+        runOnMain(new Runnable() {
+            @Override public void run() {
+                try {
+                    // Collect every view containing the point, deepest-first,
+                    // instead of stopping at the first hit: SSTabHost's last
+                    // child is an empty full-screen FrameLayout that sits over
+                    // the feed, and a naive last-child-first descent never gets
+                    // past it.
+                    List<Object> chain = new ArrayList<Object>();
+                    collectHits(root, (int) x, (int) y, 0, chain);
+                    Object hit = pickClickable(chain);
+                    if (hit == null && !chain.isEmpty()) hit = chain.get(0);
+                    if (hit == null) {
+                        System.err.println("[WL-INPUT] click " + x + "," + y + ": nothing hit");
+                        return;
+                    }
+                    Class<?> viewCls = Class.forName("android.view.View");
+                    Method perform = viewCls.getMethod("performClick");
+                    Method getParent = viewCls.getMethod("getParent");
+                    Object v = hit;
+                    for (int up = 0; up < 12 && v != null; up++) {
+                        Object r = perform.invoke(v);
+                        if (Boolean.TRUE.equals(r)) {
+                            System.err.println("[WL-INPUT] click " + x + "," + y
+                                    + " handled by " + v.getClass().getName()
+                                    + " (" + up + " levels up)");
+                            return;
+                        }
+                        Object p = getParent.invoke(v);
+                        v = viewCls.isInstance(p) ? p : null;
+                    }
+                    System.err.println("[WL-INPUT] click " + x + "," + y
+                            + ": nobody handled it -- hit chain follows");
+                    Object w = hit;
+                    for (int up = 0; up < 14 && w != null; up++) {
+                        int[] loc = new int[] { 0, 0 };
+                        viewCls.getMethod("getLocationOnScreen", int[].class)
+                               .invoke(w, (Object) loc);
+                        System.err.println("[WL-INPUT]   [" + up + "] "
+                                + w.getClass().getName()
+                                + " clk=" + viewCls.getMethod("isClickable").invoke(w)
+                                + " enabled=" + viewCls.getMethod("isEnabled").invoke(w)
+                                + " @" + loc[0] + "," + loc[1]
+                                + " " + viewCls.getMethod("getWidth").invoke(w)
+                                + "x" + viewCls.getMethod("getHeight").invoke(w));
+                        Object p2 = getParent.invoke(w);
+                        w = viewCls.isInstance(p2) ? p2 : null;
+                    }
+                } catch (Throwable t) {
+                    System.err.println("[WL-INPUT] click failed: " + t);
+                }
+            }
+        });
+    }
+
+    /**
+     * Every visible view whose bounds contain the screen point, deepest first.
+     *
+     * Not "first hit wins": this app puts an empty full-screen FrameLayout on
+     * top of the feed as SSTabHost's last child, so a plain last-child-first
+     * descent stops there and never reaches the article rows underneath.
+     */
+    private static void collectHits(Object v, int x, int y, int depth, List<Object> out) {
+        if (v == null || depth > 26 || out.size() > 400) return;
+        try {
+            Class<?> viewCls = Class.forName("android.view.View");
+            if (((Integer) viewCls.getMethod("getVisibility").invoke(v)).intValue() != 0) return;
+            int[] loc = new int[] { 0, 0 };
+            viewCls.getMethod("getLocationOnScreen", int[].class).invoke(v, (Object) loc);
+            int w = ((Integer) viewCls.getMethod("getWidth").invoke(v)).intValue();
+            int h = ((Integer) viewCls.getMethod("getHeight").invoke(v)).intValue();
+            if (x < loc[0] || x >= loc[0] + w || y < loc[1] || y >= loc[1] + h) return;
+            Class<?> vg = Class.forName("android.view.ViewGroup");
+            if (vg.isInstance(v)) {
+                int n = ((Integer) vg.getMethod("getChildCount").invoke(v)).intValue();
+                Method getChildAt = vg.getMethod("getChildAt", int.class);
+                for (int i = n - 1; i >= 0; i--) {
+                    collectHits(getChildAt.invoke(v, Integer.valueOf(i)), x, y, depth + 1, out);
+                }
+            }
+            out.add(v);   // children first, so the list is deepest-first
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** First clickable-and-enabled view in the hit list, or null. */
+    private static Object pickClickable(List<Object> chain) {
+        try {
+            Class<?> viewCls = Class.forName("android.view.View");
+            Method isClk = viewCls.getMethod("isClickable");
+            Method isEn = viewCls.getMethod("isEnabled");
+            for (int i = 0; i < chain.size(); i++) {
+                Object v = chain.get(i);
+                if (Boolean.TRUE.equals(isClk.invoke(v)) && Boolean.TRUE.equals(isEn.invoke(v))) {
+                    return v;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     /**

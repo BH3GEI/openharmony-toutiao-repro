@@ -40,7 +40,7 @@ core
 
 # root copies live in docs/
 README_REPRODUCE.md
-WHITEBOARD.md
+# WHITEBOARD.md is tracked: the goal asks for the running record to live there.
 # host-bound helper superseded by amr/build_amr.sh + scripts/deploy_and_run.sh
 amr/rebuild_and_deploy.sh
 amr/patch_relayout.py
