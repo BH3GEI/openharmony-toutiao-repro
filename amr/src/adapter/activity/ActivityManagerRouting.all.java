@@ -61,6 +61,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         ensureStubServices();
         ensurePackageManagerWrapped();
         loadVelocityTrackerShim();
+        installWebViewGuard();
         loadNativeShims();
         startTlsBootstrap();
         startViewTreeDumper();
@@ -1198,6 +1199,125 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                         System.err.println("[WL-INPUT]   at " + st[i]);
                     }
                 }
+            }
+        });
+    }
+
+    /* ------------------------------------------------------------------
+     * WebView crash guard
+     *
+     * Probed on device (`echo webview > wl_input.cmd`):
+     *
+     *   WebViewFactory.getProvider() -> OK: com.bytedance.lynx.webview.glue.TTWebProviderWrapper
+     *   new WebView(context)         -> NullPointerException
+     *     at TTWebProviderWrapper.createWebView
+     *     at android.webkit.WebView.ensureProviderCreated
+     *
+     * So this is NOT a missing WebViewFactoryProvider: getProvider() succeeds and
+     * returns the app's own TTWebView.  What is null is the real engine *inside*
+     * TTWeb -- its chromium core never initialised here -- and the NPE escapes
+     * through View.<init>, which is why inflating any layout containing
+     * PullToRefreshSSWebView takes the whole process down.
+     *
+     * Nothing here can start that engine.  What it can do is stop one dead
+     * subview from killing the app: wrap the provider so a failing createWebView
+     * hands back an inert WebViewProvider instead of throwing.  The WebView then
+     * constructs, measures as an empty view, and the rest of the layout -- the
+     * native headline, summary and images around it -- still inflates and draws.
+     * ------------------------------------------------------------------ */
+
+    private static volatile boolean sWebViewGuardTried;
+
+    private static void installWebViewGuard() {
+        if (sWebViewGuardTried) return;
+        sWebViewGuardTried = true;
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                // WebViewFactory resolves its provider lazily and caches it, and
+                // resolving needs the app context, so wait for the Application.
+                for (int i = 0; i < 400; i++) {
+                    if (appClassLoader() != null) break;
+                    try { Thread.sleep(30); } catch (InterruptedException e) { return; }
+                }
+                // getProvider() has to run on the main thread: called from this
+                // worker it throws, while the same call from the main looper (the
+                // `webview` probe) returns TTWebProviderWrapper fine.
+                try {
+                    runOnMain(new Runnable() {
+                        @Override public void run() { swapInGuardedProvider(); }
+                    });
+                } catch (Throwable th) {
+                    System.err.println("[WL-WEBVIEW] could not post guard install: " + th);
+                }
+            }
+        }, "wl-webview-guard");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static void swapInGuardedProvider() {
+        {
+                try {
+                    Class<?> factory = Class.forName("android.webkit.WebViewFactory");
+                    Method get = factory.getDeclaredMethod("getProvider");
+                    get.setAccessible(true);
+                    final Object real = get.invoke(null);
+                    if (real == null) {
+                        System.err.println("[WL-WEBVIEW] getProvider() returned null; no guard installed");
+                        return;
+                    }
+                    Class<?> providerCls = Class.forName("android.webkit.WebViewFactoryProvider");
+                    Object guarded = Proxy.newProxyInstance(providerCls.getClassLoader(),
+                            new Class<?>[] { providerCls }, new InvocationHandler() {
+                        @Override public Object invoke(Object p, Method m, Object[] args)
+                                throws Throwable {
+                            try {
+                                return m.invoke(real, args);
+                            } catch (InvocationTargetException e) {
+                                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                                Class<?> ret = m.getReturnType();
+                                if (ret.isInterface()) {
+                                    System.err.println("[WL-WEBVIEW] " + m.getName()
+                                            + " failed (" + cause + ") -> inert "
+                                            + ret.getSimpleName());
+                                    return inertProxy(ret, 0);
+                                }
+                                throw cause;
+                            }
+                        }
+                    });
+                    Field inst = factory.getDeclaredField("sProviderInstance");
+                    inst.setAccessible(true);
+                    inst.set(null, guarded);
+                    System.err.println("[WL-WEBVIEW] guard installed over "
+                            + real.getClass().getName());
+                } catch (Throwable th) {
+                    Throwable c = th;
+                    while (c instanceof InvocationTargetException
+                            && ((InvocationTargetException) c).getTargetException() != null) {
+                        c = ((InvocationTargetException) c).getTargetException();
+                    }
+                    System.err.println("[WL-WEBVIEW] guard not installed: " + c);
+                }
+        }
+    }
+
+    /**
+     * An object of the given interface that answers everything with a default.
+     *
+     * WebView does not just hold the provider: it immediately asks it for
+     * getViewDelegate() and getScrollDelegate() and calls into those from
+     * onMeasure/onDraw.  Returning null there would only move the NPE, so
+     * interface-typed results become inert proxies too, to a bounded depth.
+     */
+    private static Object inertProxy(final Class<?> iface, final int depth) {
+        if (depth > 3) return null;
+        return Proxy.newProxyInstance(iface.getClassLoader(), new Class<?>[] { iface },
+                new InvocationHandler() {
+            @Override public Object invoke(Object p, Method m, Object[] args) {
+                Class<?> ret = m.getReturnType();
+                if (ret.isInterface()) return inertProxy(ret, depth + 1);
+                return defaultValue(ret);
             }
         });
     }
