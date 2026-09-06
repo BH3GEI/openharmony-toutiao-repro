@@ -512,3 +512,27 @@ TTNoButtonErrorViewV2       GONE                                         ← 连
 > 采样提示：冷启动 50–80 s 后进程自行消失与内存强相关（重启后 5.0 GB 空闲时稳定，
 > 连跑数轮掉到 0.95 GB 即开始失败）。**采样前重启板子**，`reboot` 后
 > `pr03-boot-recovery.txt` 自动回到 `state=READY`。
+
+### 靶标 D 续：详情页的第二层与第三层地雷
+
+WebView 防崩代理只挡住了第一层。`aa start` 详情 Activity 时暴露出后两层：
+
+**第二层**（已修，dex 补丁）：
+
+```
+NullPointerException: WebSettings.getUserAgentString() on a null object reference
+  at MediaAppUtil.getWebViewDefaultUserAgent
+  at NewDetailActivity.preCreateWebView
+  at NewDetailActivity.beforeSuperOnCreate
+```
+
+`webView.getSettings()` 返回 null —— **`WebSettings` 是抽象类而不是接口**，
+所以适配层的惰性 provider（`java.lang.reflect.Proxy` 只能代理接口）造不出它。
+`preCreateWebView` 只是预热、不是前置条件，因此把入口改成 `return-void`
+（`patch_base_apk.py` 的 `classes21.dex` 项，等宽替换）。
+
+效果：`aa start DyNewDetailActivity` 从 **t+25s 进程死** 变成 **全程 `alive=1`**。
+
+**第三层**（未解决）：进程活着，但详情 Activity 在 `NewDetailActivity.initViews`
+之后 85 秒内**没有走到 `addToDisplay`**——没有异常、没有崩溃，就是没上屏。
+主窗口被让位后画面转白（38 KB）。**未取得详情页截图，如实记录。**

@@ -98,6 +98,20 @@ DEX_PATCHES = {
         (0x526E6E, bytes([0x39, 0x00, 0x5A, 0x00]), NOP2 * 2,
          'X/4Li.a(): if-nez v0,+90 (TextUtils.isEmpty(appName)) -> nop x2'),
     ],
+    # NewDetailActivity.preCreateWebView() -> return-void.
+    #
+    # The detail activity asks for the WebView user agent before anything else:
+    #   preCreateWebView -> MediaAppUtil.getWebViewDefaultUserAgent
+    #     -> webView.getSettings().getUserAgentString()
+    # getSettings() is null here -- WebSettings is an abstract class, so the
+    # adapter's WebView guard (which hands back an inert provider built from
+    # java.lang.reflect.Proxy) cannot synthesise one.  The NPE escapes onCreate
+    # and kills the process, so drop the call: it is a warm-up, not a
+    # prerequisite.  classes21.dex is untouched by every other patch here.
+    "classes21.dex": [
+        (0x84E168, bytes([0x62, 0x01, 0x46, 0x97]), RETURN_VOID + NOP2,
+         "NewDetailActivity.preCreateWebView(): entry -> return-void ; nop"),
+    ],
     "classes20.dex": [
         (0x70BA6C, bytes([0x62, 0x03, 0xB6, 0x62]), RETURN_VOID + NOP2,
          "PrivateApiLancetImpl.<clinit>: entry -> return-void ; nop"),

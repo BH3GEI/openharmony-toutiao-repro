@@ -1593,7 +1593,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
 
     /** Depth-first, but capped: a Toutiao feed is thousands of views. */
     private static void dumpView(Object v, int depth, int index) {
-        if (v == null || depth > 12) return;
+        if (v == null || depth > 22) return;   // feed item roots sit ~15 levels deep
         try {
             Class<?> viewCls = Class.forName("android.view.View");
             int vis = (Integer) viewCls.getMethod("getVisibility").invoke(v);
