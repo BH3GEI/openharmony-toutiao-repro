@@ -371,6 +371,8 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 injectKey(Integer.parseInt(a[1]));
             } else if ("click".equals(a[0]) && a.length >= 3) {
                 performClickAt(Float.parseFloat(a[1]), Float.parseFloat(a[2]));
+            } else if ("acts".equals(a[0])) {
+                dumpActivities();
             } else if ("stack".equals(a[0])) {
                 dumpMainThreadStack(0);
             } else if ("dump".equals(a[0])) {
@@ -524,6 +526,59 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
      * listener is actually attached, and if the hit view has none we walk up its
      * parents until one reports it handled the click.
      */
+
+    /**
+     * What ActivityThread thinks is running.
+     *
+     * The detail activity's click handler fires and nothing appears: no
+     * addToDisplay, no exception, no crash.  That leaves three possibilities --
+     * the activity was never created, it was created and immediately finished,
+     * or it exists but never reached makeVisible().  ActivityThread.mActivities
+     * distinguishes them directly.
+     */
+    private static void dumpActivities() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object cur = at.getMethod("currentActivityThread").invoke(null);
+            Object map = readField(at, cur, "mActivities");
+            if (!(map instanceof Map)) {
+                System.err.println("[WL-ACTS] mActivities is " + map);
+                return;
+            }
+            Map<?, ?> m = (Map<?, ?>) map;
+            System.err.println("[WL-ACTS] ==== " + m.size() + " record(s) ====");
+            for (Object rec : m.values()) {
+                if (rec == null) continue;
+                Object act = readFieldValue(rec, "activity");
+                String cls = act == null ? "(null activity)" : act.getClass().getName();
+                StringBuilder sb = new StringBuilder("[WL-ACTS] ").append(cls);
+                Object paused = readFieldValue(rec, "paused");
+                Object stopped = readFieldValue(rec, "stopped");
+                if (paused != null) sb.append(" paused=").append(paused);
+                if (stopped != null) sb.append(" stopped=").append(stopped);
+                if (act != null) {
+                    try {
+                        sb.append(" finishing=")
+                          .append(act.getClass().getMethod("isFinishing").invoke(act));
+                    } catch (Throwable ignored) { }
+                    try {
+                        Object win = act.getClass().getMethod("getWindow").invoke(act);
+                        sb.append(" window=").append(win == null ? "null" : "yes");
+                        if (win != null) {
+                            Object dv = win.getClass().getMethod("peekDecorView").invoke(win);
+                            sb.append(" decor=").append(dv == null ? "null" : "yes");
+                        }
+                    } catch (Throwable ignored) { }
+                    Object added = readFieldValue(act, "mWindowAdded");
+                    if (added != null) sb.append(" windowAdded=").append(added);
+                }
+                System.err.println(sb.toString());
+            }
+        } catch (Throwable t) {
+            System.err.println("[WL-ACTS] failed: " + t);
+        }
+    }
+
     private static void performClickAt(final float x, final float y) throws Exception {
         Object vri = topInputTarget();
         if (vri == null) {

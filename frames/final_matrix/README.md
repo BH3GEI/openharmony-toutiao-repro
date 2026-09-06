@@ -1,68 +1,68 @@
-# 全界面验收矩阵
+# 全界面验收画册
 
-板端 DAYU200 / OpenHarmony 6.1.0.31，1200x1920，2026-09-06 实测。
-运行组合：`base.final9.apk` + `oh-adapter-runtime.all.jar`（输入泵 + 窗口按秩选 +
-VelocityTracker + Theme AXML 兜底 + WebView 防崩代理 + SQLite shim + TLS 网关）。
+板端 DAYU200 / OpenHarmony 6.1.0.31，1200x1920。
+一次自动化巡检跑出来的连续画面，脚本见 [`scripts/wl_matrix.sh`](../../scripts/wl_matrix.sh)。
 
-| # | 界面 | 采集方式 | 结果 | 截图 |
+运行组合：`base.final10.apk` + `oh-adapter-runtime.all.jar`
+（输入泵 · 窗口按秩选 · VelocityTracker · Theme AXML 兜底 · WebView 防崩代理 ·
+SQLite shim · TLS 网关 · ALooper）。
+
+## 巡检闭环实测
+
+`推荐流 → 视频频道 → 回信息流 → 搜索页 → 返回 → 个人中心 → 回信息流`
+
+| 步 | 界面 | 驱动 | 结果 | 画面 |
 |---|---|---|---|---|
-| 1 | 推荐信息流 | 冷启动 `aa start MainActivity` | ✅ 真实内容 | ![](01-feed-recommend.jpeg) |
-| 2 | 视频频道 | `wl_input.sh tap 560 213` | ✅ 切换成功，进程存活 | ![](02-video-channel.jpeg) |
-| 3 | 搜索主页 | `aa start com.android.bytedance.search.SearchActivity` | ✅ 上屏；下方内容区空 | ![](03-search-activity.jpeg) |
-| 4 | 个人中心 | `wl_input.sh tap 1050 1870` | ❌ **未切换** | ![](04-mine-tab-no-switch.jpeg) |
+| 1 | 推荐信息流 | 冷启动 | ✅ 真实新闻流 | ![](01-feed-recommend.jpeg) |
+| 2 | **视频频道** | `tap 560 213` | ✅ **真实视频流** | ![](02-video-channel.jpeg) |
+| 3 | 回到推荐流 | `tap 190 213` | ✅ 正确返回 | ![](03-back-to-feed.jpeg) |
+| 4 | 搜索页 | `aa start SearchActivity` | ✅ 窗口上屏（`wlwin=1`）| ![](04-search-activity.jpeg) |
+| 5 | 从搜索页返回 | `key 4` | ❌ **未返回** | ![](05-after-mine-tap-still-search.jpeg) |
+| 6 | 个人中心 | `tap 1050 1870` | ❌ 未到达（仍在搜索页）| 同上 |
+| 7 | 回信息流 | `tap 150 1870` | ❌ 未到达 | 同上 |
+
+**全程 `alive=1`，没有一次闪退。** 这是本轮最实在的结果：以前视频频道点一下就
+`InflateException … PullToRefreshSSWebView` 打死进程，现在整条链路跑完进程都活着。
 
 ## 逐条说明
 
-**1 · 推荐信息流** — 158 KB。内容来自 `news_article.db` 缓存（该轮全进程仅少量 TLS 连接）。
+**第 2 步是本轮的突破。** 视频频道从"点了必崩"到"渲染出真实视频流"：
+两条视频卡片带作者（我爱水电维修 / 心雨分享）、缩略图、
+`29.9万次播放`、`01:02` 时长、`287` 评论、`2705` 赞。197 KB，
+比推荐流还大——此前该频道的空态截图只有 76–93 KB。
 
-**2 · 视频频道** — 93 KB。**此前 100% 打死进程**
-（`InflateException … PullToRefreshSSWebView`），现在切换成功且 `alive=1`。
-这是 WebView 防崩代理的直接效果。
+**第 5 步是闭环的断点。** `key 4` 确实派发到了主窗口
+（日志 `[WL-INPUT] key 4 -> ViewRootImpl(type=1 …)`），但搜索 Activity 没有 finish，
+后续两步因此都停在搜索页上。**闭环走通 1→4，断在返回。**
 
-**3 · 搜索主页** — 43 KB。这一格经历了三层修复才上屏：
+**深层页面导航（详情页 / 作者主页 / 评论区）仍未打通。** 已剥掉的四层：
 
-1. `ActivityInfo.theme` 恒为 0 → `IllegalStateException: You need to use a
-   Theme.AppCompat theme` → 进程死。修法：适配层内置 AXML 解析回填 theme。
-2. `NoClassDefFoundError: X.BdA` → 进程死。`X.BdA.<clinit>` 调 `c()`，
-   后者经 `X.3CD.a` 撞上 `ArrayIndexOutOfBoundsException(length=0)`；
-   `<clinit>` 一失败该类被永久标记 erroneous。修法：dex 等宽替换，字段置 null。
-3. 上屏后**顶栏渲染正常**（返回箭头、输入框、红色「搜索」），
-   **下方搜索建议/热搜区仍为空** —— 那需要实时接口，而
-   `api.toutiaoapi.com` 对本机一律返回 `400 invalid user`（无 `device_id`/`install_id`），
-   属设备注册层，不是 UI 层。
-
-**4 · 个人中心** — 逐像素与信息流一致，**未切换**。坐标经绝对矩形核对无误
-（`MainTabIndicator abs=[900,1821][1200,1920]`），事件确实送达主窗口且无异常。
-点击会触发到 `api.toutiaoapi.com` 的真实 HTTPS 请求，但 Tab 不切换——
-与第 3 格下半部分同源，都指向设备身份未注册。**如实记录为未通过。**
-
-> 采集提示：冷启动 50–80 s 后进程自行消失与内存强相关（重启后 5.0 GB 空闲时稳定，
-> 连跑数轮掉到 ~1.0 GB 即开始失败）。**采集前重启板子。**
-> 另：hdc 连接会弹出系统「USB 连接方式」对话框盖住画面，
-> 用 `uinput -T -c 600 1185` 点掉「确定」后再截图。
-
-## 附：详情页为什么不在矩阵里
-
-详情页（`DyNewDetailActivity`）的**崩溃已经全部消除**，但仍拿不到画面。三层依次剥开：
-
-| 层 | 现象 | 处理 |
+| 层 | 现象 | 状态 |
 |---|---|---|
-| 1 | `createWebView` NPE → `InflateException` → 进程死 | WebView 防崩代理（惰性 provider）|
-| 2 | `WebSettings.getUserAgentString()` on null，出自 `preCreateWebView` | dex 中和 `preCreateWebView`（classes21）|
-| 3 | `FileNotFoundException: emoticon/emoticon.conf` 出自 `initEmojiIconLayout`，被 Mira 吞掉导致 `setContentView` 未完成 | dex 中和 `initEmojiIconLayout`（classes6）。该 asset **apk 里根本没有**（466 个 assets 零命中），真机上由插件下发 |
+| 1 | `createWebView` NPE → `InflateException` → 进程死 | ✅ WebView 防崩代理 |
+| 2 | `WebSettings.getUserAgentString()` on null（`preCreateWebView`）| ✅ dex 中和 classes21 |
+| 3 | `emoticon/emoticon.conf` 缺失被 Mira 吞掉 | ✅ dex 中和 classes6 |
+| 4 | 适配层 `scheduleTransaction OK`，但 `mActivities` 里始终没有该 Activity | ❌ |
 
-三刀之后：**进程全程 `alive=1`、日志无任何异常**，但 `addToDisplay` 计数仍为 0。
-最可能的原因是 `aa start` 没有携带文章 ID，详情 Activity 没有可展示的内容而自行
-`finish()` —— 这在真机上不会发生，因为详情页总是从信息流条目点进去的。
+第 4 层的证据很干净：`aa start` 详情页之后，
+`[B47-SLA] BEFORE/AFTER scheduleTransaction OK`、
+`activityInfo theme=0x7f090002`（Theme 兜底已生效）、
+MainActivity 变成 `paused=true stopped=true`（OH 确实切了场景），
+但 `ActivityThread.mActivities` **始终只有 MainActivity 一条**，
+无异常、无崩溃。事务投递了却没有产生 Activity 记录。
 
-而**从信息流点进去这条路也不通**：控件树显示条目根与标题都不是 clickable
+信息流点击那条路同样：`click 400 620 handled by FeedItemRootLinerLayout`
+（监听器确实跑了），但 `mActivities` 不变、`MainActivity.paused=false`——
+连页面切换都没发起。
 
+## 复现
+
+```bash
+hdc file send scripts/wl_matrix.sh /data/local/tmp/wl_matrix.sh
+hdc shell "sh /data/local/tmp/wl_matrix.sh"
+hdc file recv /data/local/tmp/WM_01-feed.jpeg ./
 ```
-FeedItemRootLinerLayout  y=531..698 / 699..866 / 867..1871   clk=False
-FeedTitleTextView        y=272..322 / 438..488               clk=False
-```
 
-只有头像、来源名、「…」菜单挂了监听器。合成点击落点再准也不会导航。
-
-**结论：详情页的闪退已修完，但"能显示"还差一个入口——要么给 `aa start` 补上
-文章 ID 参数，要么查清头条信息流条目的点击是怎么绑定的。如实记录为未取得。**
+采集前**先重启板子**：冷启动 50–80 s 后进程自行消失与内存强相关
+（重启后 5.0 GB 空闲时稳定，连跑数轮掉到 ~1.0 GB 即开始失败）。
+另外 hdc 接上会弹系统「USB 连接方式」对话框盖住画面，脚本已自动点掉。
