@@ -334,7 +334,38 @@ DecorView 1200x1920 → LinearLayout → FrameLayout → ActionBarOverlayLayout
 ```
   三个交互控件均 `vis=VISIBLE shown=true` 且有真实测量尺寸与坐标,处于可交互就绪状态。
 
-### 打通首屏的三处关键修复(本轮)
+### 排雷 #28 首屏交互闭环:OH 触摸到不了 Android 窗口(平台缺口)+ 进程内派发绕过
+- **注入本身是好的**:桌面上 `uinput -T -c 600 900` 后 hilog 有 `InputManagerImpl: Pointer event action:2/4` 与 `ServerMsgHandler` 处理,说明 OH 侧注入链路正常。
+- **事件确实送到了微信进程,但被丢弃**(决定性证据,pid 4161 即微信):
+```
+4161 4278 E C02800/InputManagerImpl: [P:D:9|631]CHKPV(eventHandler_) is null
+4161 4278 E C02800/InputManagerImpl: [P:U:10|631]CHKPV(eventHandler_) is null
+```
+  即 anco 子进程从未注册 OH 输入消费者(`eventHandler_` 为空)。核对二进制:`liboh_android_runtime.so` 与 `libwestlake_android_child.z.so` **都不含 `SetWindowInputEventConsumer` 符号**,适配层只建了 InputChannel 对(`OH_WSA step3a createInputChannelPair OK`)却没有把 OH PointerEvent 转投进去 —— **Android 窗口收不到真实触摸,是平台级缺口(留 S3)**,不是我的 runtime jar 能补的(该 API 是 native C++)。
+- **绕过(runtime jar,`installTapDispatcher`)**:监视 `/data/local/tmp/wl-tap`(内容 "x y"),在 UI 线程用反射合成 `MotionEvent` ACTION_DOWN/UP 直接 `decorView.dispatchTouchEvent`。走的是真实命中测试与真实 OnClickListener,只是跳过了缺失的 OH→Android 输入桥。
+
+### 🎯 首个交互闭环达成(点击「登录」→ 微信调度次级表单)
+- 实测:`[WL-TAP] dispatched (247.0,1788.0) on com.tencent.mm.plugin.account.ui.WelcomeActivity handled down=true up=true` —— **事件被视图树消费**。
+- 微信随即发起次级页面调度(hilog 关隐私后可见):
+```
+bridgeStartAbility: bundle=com.tencent.mm, ability=com.tencent.mm.plugin.account.ui.MobileInputUI
+StartAbility returned 2097205
+```
+  即点击真的触发了业务逻辑,目标是**手机号输入页 `MobileInputUI`**;被 #21 那条"OH AMS 拒绝一切应用内 startActivity"的老限制挡住。
+- 交互反馈截图与日志:`logs/wechat_login_action.jpeg`(123306B,点击后画面;因次级页被 AMS 拒绝,画面仍停在欢迎页)、`logs/wechat_login_action.stderr`(5316 行,含 WL-TAP、点击前后视图树、bridgeStartAbility 证据)。
+
+### 次级表单现状:已能挂载,但内容被插件框架卡住
+- 用容器复用把 redirect 目标设为 `MobileInputUI 7f1102ab`(该页无自有 theme,继承 application 主题)后,**Activity 确实被实例化**:
+  `[WL-ACT] com.tencent.mm.plugin.account.ui.MobileInputUI ... contentChildren=0`(存活到 90s)。
+- 但内容始终没挂上,主线程停在与首屏同源的插件生命周期等待,只是入口不同:
+```
+main WAITING: ForkJoinTask.get ← sd5.n0.l ← ... ← transitLifecycleStatusOnDemand
+              ← sd5.n0.c ← com.tencent.mm.plugin.multitask.d2.onCreate   ← 插件再入
+```
+  即 `plugin.multitask` 启动时又同步驱动一次 transit,而底下那个迟迟不完成的任务仍是之前定位到的 **WCDB CSO 原生加载**(`CsoLoader → SQLiteGlobal.<clinit> → System.load`)。
+- 下一步方向:把 WCDB 的 CSO 加载做成确定性可完成(预热/替换为直接 `System.loadLibrary("WCDB")`),或按 AccUtil 的思路把 `plugin.multitask` 这条同步再入摘掉,次级表单即可上屏。
+
+### 打通首屏的三处关键修复(上一轮)
 1. **主题恢复**(#25):适配层把 `ActivityInfo.theme` 清零,微信 AppCompat 界面无法成型。redirect 钩子按 manifest 回填 `mInfo.theme` 与 `applicationInfo.theme`(标志文件 `<class> <themeHex>`;同类名=仅改主题)。
 2. **解开 SplashHackInstrumentation**(#26 的真正解法):微信用 `com.tencent.mm.splash.SplashHackInstrumentation` 包住系统 Instrumentation,其 `newActivity()` 对 launcher 组件直接返回 `new SplashHackActivity(...)`,所以无论怎么改 intent/ActivityInfo,实例化出来的都是占位 Activity。
    - 先试 dex 改写 `newActivity` 走 `invoke-super`,结果子进程 **exit 123**(dex 加载被拒),已把该 dex 补丁在 `rebuild_apk.sh` 里默认关掉(`INSTR_DEX_PATCH=1` 才启用)。
@@ -366,3 +397,129 @@ DecorView 1200x1920 → LinearLayout → FrameLayout → ActionBarOverlayLayout
 - `native/wlnatives/{wlnatives.c,build_wlnatives.sh,libm_stub.c,build_libm.sh,build_stubs.sh}`;产物 libwlnatives.so(5320B)、libm.so/libdl.so(空 stub,各 1520B)。
 - WeChat bundle lib/arm64-v8a 新增:libwlnatives.so、libm.so、libdl.so(stub)、libz.so(127KB real)、liblog.so(72KB real)。
 - 崩溃取证脚本:解码 `MicroMsg/crash/.exception.*.preventcrashlog` 的 `error_json_<base64+zlib>`(见会话)。dism.py 通用 dex 反汇编(/private/tmp/dism.py)。
+
+### 排雷 #29 ★根因★ libWCDB 的 OpenSSL CPU 探测构造函数在 musl 下砸栈死循环(已修,dlopen 76ms)
+
+这是把 MobileInputUI/LauncherUI 卡在 `contentChildren=0` 的**真正根因**,之前一直被误判为"CSO 加载不确定"。
+
+**证据链**
+1. 主线程栈:`LauncherUI.onCreate → UIComponentActivity.initializeUIC → superImportUIComponents →
+   zb0.o.Ti → sd5.n0.c → transitLifecycleStatusOnDemand → ForkJoinTask.invoke → sd5.u.compute →
+   plugin.multitask.d2.onCreate(85) → sd5.n0.c → …` —— `d2.onCreate` 偏移 85=0x55 正是
+   `invoke-static sd5/n0.c(Lt80/q;)`,即插件同步再入。
+2. 六个 `wc_srvinit_*` 全部 `futex_wait`,只有一个在 `Runtime.nativeLoad` 里 **RUNNABLE**;
+   `/proc/<tid>/wchan=0 syscall=running` → **在跑,不是死锁**;libWCDB.so 五个段已全部 map。
+3. `kill -6` 取 cppcrash tombstone(SIGDUMP/kill -35 在本板不产出 stacktrace 文件):
+   ```
+   Tid:wl-wcdb
+   #00 ld-musl-aarch64.so.1(sigprocmask+120)
+   #01 libWCDB.so + 0x3b8778
+   #02 ld-musl(do_init_fini+444)
+   #03 ld-musl(dlopen_impl+1768)
+   ```
+4. 反汇编 0x3b8468 起是教科书式 `OPENSSL_cpuid_setup`(BoringSSL 静态链进 libWCDB):
+   `mrs x20,TPIDR_EL0; ldr x8,[x20,#0x28]`(bionic 栈哨槽)→ `str x8,[sp,#0xb8]` →
+   `sigfillset/sigaction/sigprocmask` + `sigsetjmp/siglongjmp` 跑 `_armv7_neon_probe`
+   `_armv8_sha256_probe` `_armv8_pmull_probe` 等探针指令。
+
+**机理**:该库按 **bionic 头文件**编译,`sigset_t`=8B、`struct sigaction`≈32B;OHOS-musl 是
+**128B / 152B**。函数把这些结构放在 `sp+0x8`、`sp+0x38`,musl 一写就越界——`sp+0x38+152`
+直接盖穿 `sp+0xb8` 的 canary 和 `sp+0xc0/0xd0` 的 x21/x20/x19/x30。canary 校验**正确地**失败,
+跳到 `0x3b8620: bl __stack_chk_fail`。而我们早前为绕过它引发的 SIGSEGV 把
+`__stack_chk_fail` UND 改名成了 `getpid` → **该调用变成会返回** → 落进后面的探针块 →
+`0x3b878c: b 0x3b8620` → **无限 CPU 空转**,而且是在 `do_init_fini` 里持有 ART 的 libraries 锁,
+于是所有插件线程排队卡死,Activity 永远到不了 setContentView。
+
+**修法**(`scripts/patch_wcdb_cpuid_probe.py`,全库只改 4 字节):
+把 `0x3b8468` 的 `sub sp,sp,#0xe0` 换成 `ret`,让 `OPENSSL_cpuid_setup` 直接返回。
+`OPENSSL_armcap_P` 保持 0 = BoringSSL 官方支持的"无 ARM 加密扩展"配置,退回通用实现。
+中途试过的"把 `bl __stack_chk_fail` 改成跳到函数尾"(`patch_wcdb_canary_loop.py`)**不够**:
+栈已被砸,提前返回会把垃圾恢复进 x19/x20/x21,`do_init_fini` 自己 SIGSEGV(SEGV_ACCERR)。
+必须让它**根本不执行**。
+
+**实测**:`[WL-WCDB] load OK in 76ms probe=true`(此前 90s+ 不返回)。
+`probe=true` 说明 libWCDB 的 JNI_OnLoad 正常跑完并自己置了 `WCDBInitializationProbe.libLoaded`。
+
+**推论(重要,可能是通用规律)**:凡 bionic 编译、会碰 `sigset_t`/`struct sigaction`/
+`pthread_*` 结构体的库,在 anco musl 下都可能砸栈。`__stack_chk_fail` 改名成会返回的函数是
+**危险的**——它把"响亮的崩溃"变成"静默的死循环/乱跑"。今后只在确认调用点后做定点中和。
+
+### 适配层新增:WCDB 预热(`prewarmWcdb`)
+`SQLiteGlobal.<clinit>` 首条指令就是 `sget-boolean WCDBInitializationProbe.libLoaded; if-nez → return-void`。
+适配层在 `attachApplication` 的 shim 线程里(拿到 app ClassLoader + nativeLibDir 后)用
+`Runtime.nativeLoad(<nativeLibDir>/libWCDB.so, appClassLoader)` 单线程先加载一次——路径与
+`CsoLoader.e("WCDB")` 经 `System.mapLibraryName` 解析出的完全一致,ART 库表命中即秒回。
+`/data/local/tmp/wl-wcdb-skip` 存在时改为只置 `libLoaded=true` 完全跳过(A/B 用)。仅对
+`isWeChat()` 生效,头条不受影响。
+
+### 排雷 #30 libwechatxlog.so 缺 `__pthread_cleanup_push`(WCDB 通了之后浮出的下一张多米诺)
+WCDB 不再霸占加载锁后,`plugin.zero.k0.onCreate → lp.d0.o/r/q/p → System.load` 报:
+`dlopen_ns failed for app_recovery_lib/libvoipComm.so: Error relocating
+lib/arm64-v8a/libwechatxlog.so: __pthread_cleanup_push: symbol not found`。
+`__pthread_cleanup_push/pop` 是 bionic 独有(musl 里是宏)。用 `elf_rename_undef.py` 把两个 UND
+改名为 `getpid` 后重推。注意这与之前"7 库大扫除导致启动倒退"不同:这次**只动这一个库的两个符号**。
+
+### 板端操作纪律补充(本轮踩到的坑)
+- **anco 子进程在 `ps -ef` 里全部显示为 `appspawn-x`**,`grep article` 永远匹配不到。判定头条是否在跑
+  **只能看 uid**:头条=20010057,微信=20010058。`pidof appspawn-x` 会一并杀掉头条,**严禁使用**;
+  清理只用 `ps -ef | grep '^20010058 '`。
+- 板端 `sh` 没有 `awk` / `tr`;`grep 'A\|B'` 的 BRE 交替也不生效(会静默不匹配)。脚本里全部改用
+  `sed` / `cut` / 单模式 grep。
+- hdc 链路会周期性掉线(`Not match target founded`),`hdc kill && hdc start` 重试 2–3 次可恢复;
+  长任务一律 `nohup … &` 落板端日志再轮询,别让长命令挂在 hdc 上。
+- 共享 jar 仍在被另一会话高频覆盖(本轮见 038d3643→717d2591→838662b9)。现在的做法是把
+  `cp jar` 与 `aa start` 放进同一个板端脚本,再用只有本构建才有的 `WL-WCDB` 标记**验证子进程确实
+  用了我的 jar**,不通过就重试(见 `scripts/board_cap_form.sh`)。
+
+### 排雷 #31 七库 `__pthread_cleanup_*` 定点改名(本轮重做,结论与上次相反)
+WCDB 通了之后,`plugin.zero.k0.onCreate → lp.d0.p → System.load` 依次报
+`Error relocating <lib>: __pthread_cleanup_push: symbol not found`,先 libwechatxlog,
+修完立刻轮到 libmarscomm。扫描 APK 得到全部 7 个导入者:
+`libwechatbase / libwechatmm / libwechatnetwork / libmarscomm / libwechatpaybase /
+libwechatpaynetwork / libwechatxlog`,逐个用 `elf_rename_undef.py` 把
+`__pthread_cleanup_push`、`__pthread_cleanup_pop` 两个 UND 改名为 `getpid`(各 43 字节改动),
+备份为 `<lib>.so.prepatch`。**修完 `symbol not found` 全部消失**。
+上一轮把这批改动整体回退、并归因为"启动倒退",现在看那次倒退的真凶是 WCDB 死循环(#29);
+这次只动 `__pthread_cleanup_*`、没有一起动 `__system_property_get`,native 加载确实通了。
+
+### 排雷 #32 ⛔当前拦路虎:`libbionic_compat.so` 的 `__system_property_get` 跳 NULL(平台级)
+native 加载全通之后,进程稳定崩在:
+```
+Tid:wc_srvinit_*  SIGSEGV(SEGV_MAPERR)@0x0  pc=0 Not mapped
+#01 /system/android/lib64/libbionic_compat.so(__system_property_get+52)
+```
+反汇编 libbionic_compat.so:`__system_property_get` 起于 0x2f6c,0x2f9c 处
+`bl SystemReadParam@plt`,**+52(=0x2fa0)正是这条 bl 的返回地址** —— 也就是
+`SystemReadParam` 的 PLT 槽解析成了 0。libbionic_compat.so 的 `DT_NEEDED` 里有
+`libbegetutil.z.so`(真身在 `/system/lib64/chipset-sdk-sp/libbegetutil.z.so`,
+platformsdk / chipset-pub-sdk 下都是软链),在微信子进程的 linker namespace 里没解析上。
+
+已试**无效**:把 `libbegetutil.z.so` 拷进微信自己的 lib 目录(libz/liblog 那招)。
+原因:libbionic_compat.so 在子进程早期就已加载并完成绑定,晚到的 app lib 目录进不了它的
+搜索域。
+
+影响面很大:APK 里 **105 个 .so 导入 `__system_property_get`**(libcrypto、libmmkv、
+libmatrix-*、libcronet、libWCDB…),逐库改名不现实(而且很多在 `app_recovery_lib`,
+每次启动从 APK 重新解包,必须改 APK 才持久)。
+
+**下一步(两条路,建议先 b)**
+- (a) 让微信子进程的 namespace 能解析 `libbegetutil.z.so`(改 appspawn-x / westlake 的
+  namespace 配置)——干净但属于 S3/官方合流范围。
+- (b) 定点补 `libbionic_compat.so`:把 `bl SystemReadParam@plt` 改成"指针为空则返回 0"的
+  形态(或直接让 `__system_property_get` 在拿不到时走 0x2fac 的 `w1` 返回路径)。
+  **注意该库与头条共享**,必须做成"能解析就照常调、解析不到才返回 0"的加法式补丁,
+  不能无条件短路;改前务必备份并在头条上回归。
+
+### 本轮实测汇总(child 3201,jar 038d3643)
+- `[WL-WCDB] load OK in 78ms probe=true` —— #29 修复稳定复现(45/68/76/78/100ms 五次)。
+- `symbol not found` 归零 —— #31 修复生效。
+- 崩在 #32 的 `__system_property_get`,进程 ~12s 退出,**未产出 MobileInputUI 的
+  `contentChildren>0`,因此没有 `logs/wechat_login_form.jpeg`(不伪造)**。
+- 板端已就位的补丁件(均有 `.prepatch` 备份):libWCDB.so(e9fa13d1)、libwechatxlog.so
+  (ee224ba3)、libwechatbase/libwechatmm/libwechatnetwork/libmarscomm/libwechatpaybase/
+  libwechatpaynetwork、libcrypto.so(00ef63bb)。
+- 新增脚本:`scripts/patch_wcdb_cpuid_probe.py`(根因修复)、`scripts/patch_wcdb_canary_loop.py`
+  (中间态,已被前者取代,保留作记录)、`scripts/board_cap_form.sh`(带 jar 校验重试)、
+  `scripts/board_probe_wcdb.sh`、`scripts/board_wcdb_tomb.sh`、`scripts/board_wcdb_rate.sh`。
+- 取证:`logs/wcdb_tomb.txt`(死循环现场)、`logs/wcdb_tomb2.txt`(提前返回导致 do_init_fini 崩)、
+  `logs/wcdb_tomb3.txt` / `logs/wcdb_tomb4.txt`(`__system_property_get` 跳 NULL)。

@@ -48,12 +48,12 @@ pick_first_existing() {
 }
 
 JAR="$(pick_first_existing \
-  "$ROOT/amr/build/oh-adapter-runtime.all.jar" \
+  "$ROOT/prebuilts/oh-adapter-runtime-unified.jar"   "$ROOT/amr/build/oh-adapter-runtime.all.jar" \
   "$ROOT/prebuilts/oh-adapter-runtime.tls.jar" \
   "$ROOT/prebuilts/oh-adapter-runtime.jar" || true)"
 
 APK="$(pick_first_existing \
-  "$ROOT/prebuilts/base.final11.apk" \
+  "$ROOT/prebuilts/base.final14.apk"   "$ROOT/prebuilts/base.final13.apk"   "$ROOT/prebuilts/base.final12.apk"   "$ROOT/prebuilts/base.final11.apk" \
   "$ROOT/prebuilts/base.final10.apk" \
   "$ROOT/prebuilts/base.final9.apk" \
   "$ROOT/prebuilts/base.final8.apk" \
@@ -63,6 +63,7 @@ APK="$(pick_first_existing \
 STACKGROW="$ROOT/prebuilts/libwestlake_stackgrow.so"
 ICUSHIM="$ROOT/prebuilts/libwlicu.so"
 TTTEXT="$ROOT/prebuilts/libtttext_lite.patched.so"
+SQLITE="$ROOT/prebuilts/libwlsqlite.so"
 
 # =============================================================================
 # 小工具
@@ -221,6 +222,18 @@ deploy_shared_runtime() {
                 chcon u:object_r:system_file:s0 \$T/libwestlake_stackgrow.so 2>/dev/null || true
               done"
     ok "stackgrow"
+  fi
+
+  if [ -n "${SQLITE:-}" ] && [ -f "$SQLITE" ]; then
+    info "libwlsqlite.so"
+    hdc file send "$SQLITE" /data/local/tmp/libwlsqlite.so
+    sh_board "for T in /data/app/el1/bundle/public/com.tencent.mm/android/lib/arm64-v8a /data/app/el1/bundle/public/com.ss.android.article.news/android/lib/arm64-v8a; do
+                [ -d \$T ] || continue
+                cp /data/local/tmp/libwlsqlite.so \$T/
+                chmod 755 \$T/libwlsqlite.so
+                chcon u:object_r:data_app_el1_file:s0 \$T/libwlsqlite.so 2>/dev/null || true
+              done; rm -f /data/local/tmp/libwlsqlite.so"
+    ok "libwlsqlite.so"
   fi
 
   # TLS 载荷（若仓库里有就推；没有也不致命——旧板端可能已有）

@@ -69,9 +69,30 @@ python3 "$ROOT/scripts/patch_retconst.py" "$W/classes14.dex" "$W/c14.final" \
     'Lcom/tencent/mm/accessibility/uitl/AccUtil;->isAccessibilityEnabled()Z=0' \
     'Lcom/tencent/mm/accessibility/uitl/AccUtil;->canPreDeal()Z=0'
 
-echo "== classes16: Cronet network-change autodetect =="
-python3 "$DEXPATCH" "$W/classes16.dex" "$W/c16.final" \
-    'Lorg/chromium/net/NetworkChangeNotifierAutoDetect;->register()V'
+echo "== classes16: Cronet network-change autodetect + library init =="
+# Cronet cannot come up on this board at all.  Its ALooper_* imports do not exist in
+# OHOS's libandroid.so (only 6 of the NDK entry points are implemented and none of
+# ALooper), and android.net.ConnectivityManager$OnNetworkActiveListener is missing from
+# the adapter's framework.jar, so Chromium's init runs into its own CHECK and the
+# CronetInit thread takes the process down with SIGTRAP.  Stubbing the ALooper PLT
+# entries only moved the failure further in.  The library still has to *load* -- WeChat's
+# own loader throws UnsatisfiedLinkError out of the plugin transit if the dlopen fails,
+# which kills MobileInputUI -- so leave the .so alone and neutralise the Java entry
+# points that would initialise it.
+python3 "$DEXPATCH" "$W/classes16.dex" "$W/c16.a" \
+    'Lorg/chromium/net/NetworkChangeNotifierAutoDetect;->register()V' \
+    'Lorg/chromium/net/impl/CronetLibraryLoader;->ensureInitialized(Landroid/content/Context;Lorg/chromium/net/impl/CronetEngineBuilderImpl;)V' \
+    'Lorg/chromium/net/impl/CronetLibraryLoader;->ensureInitializedOnInitThread()V' \
+    'Lorg/chromium/net/impl/CronetLibraryLoader;->ensureInitializedFromNative()V'
+# ensureInitializedOnInitThread is what opens CronetLibraryLoader's sWaitForLibLoad
+# ConditionVariable.  With it neutralised nothing ever opens it, and the *main* thread
+# deadlocks: loading a mars library runs its JNI_OnLoad, which calls back into
+# getBaseFeatureOverrides(), which blocks on that variable forever -- MobileInputUI then
+# sits with a decor view and contentChildren=0.  Answer without blocking instead --
+# with an *empty* array, not null: the native side treats the result as a real array and
+# CHECKs on it, so null just moves the failure to a SIGTRAP on a plugin thread.
+python3 "$ROOT/scripts/patch_ret_empty_bytes.py" "$W/c16.a" "$W/c16.final" \
+    'Lorg/chromium/net/impl/CronetLibraryLoader;->getBaseFeatureOverrides()[B'
 
 python3 - "$SRC" "$W/dexed.apk" "$W/c12.final" "$W/c16.final" "$W/c14.final" <<'PY'
 import sys, zipfile, os
@@ -93,4 +114,8 @@ echo "== native: bionic-only pthread cleanup symbols across every arm64 library 
 # WeChat re-extracts app_recovery_lib from the APK on every launch, so the archived
 # copies are the ones that matter.  Sweep them all: libwechatxlog pulls in
 # libmarscomm, and any other bionic-built library importing these dies the same way.
-python3 "$ROOT/scripts/patch_apk_natives.py" "$W/dexed.apk" "$OUT"
+python3 "$ROOT/scripts/patch_apk_natives.py" "$W/dexed.apk" "$W/natives.apk"
+
+echo "== native: NDK entry points OHOS's libandroid.so does not implement =="
+python3 "$ROOT/scripts/weaken_apk_ndk.py" "$W/natives.apk" "$OUT" \
+    "$ROOT/refs/ld-musl.so" "$ROOT/refs/libandroid.so" "$ROOT/refs/libbionic_compat.so"
