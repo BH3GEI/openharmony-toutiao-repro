@@ -1436,3 +1436,56 @@ NPE: WebSettings.setGeolocationEnabled(boolean) on null
 （多半仍是 `device_id`/`install_id` 那条身份线），而不是 Activity 启动链路。
 
 单容器方案正是绕开这个分歧的做法：不依赖谁拦了谁，直接把页面挂进宿主容器。
+
+## 第二十三节：单容器流转链路板端验证通过（S1，2026-09-07 15:37）
+
+跨窗口那条路走不通就不再依赖它。把目标挂进宿主 Activity 自己的
+`android.R.id.content`（实测 `androidx.appcompat.widget.ContentFrameLayout`），
+`FragmentTransaction` 挂上去就是一次页面切换，不离开已经在屏幕上的窗口。
+
+### 实测
+
+| 步 | 大小 | 说明 |
+|---|---|---|
+| 挂载前 | 219 KB | 完整信息流 |
+| 挂载后 | 44 KB | 新页整屏覆盖，频道栏与底部导航都被盖住 |
+| 物理返回后 | 219 KB | 信息流原样回来 |
+
+```
+[WL-MOUNT] mounted ...RecommendFragmentV4 as wl-mount-1 backStack=1
+[WL-INPUT] key 4 -> ViewRootImpl(...)
+[WL-MOUNT] pop ok backStack 1 -> 0
+[WL-BACK]  key: popped a mounted page, activity kept
+[WL-MOUNT] fm=androidx.fragment.app.FragmentManagerImpl backStack=0
+```
+
+全程 `alive=1`，Activity 没被 finish。BACK 的两种含义由 `injectKey` 先问
+`unmountFragment()` 决定：有挂载页就弹页、没有才 finish，
+和真机上 FragmentManager 回退栈优先于 `Activity.finish()` 的顺序一致。
+
+截图见 `frames/screens/41..43`。**挂的是 `RecommendFragmentV4`**——应用自己正在
+用的类，新起一个实例；它渲染的是应用自己的「当前网络不可用，点击重试」空态
+（新实例没数据，还是 `device_id` 那条线）。**这不是详情页**，是用应用真实的 UI
+证明容器内切与物理返回这条链路通了。
+
+### 详情页本身：挂得上，建不出视图
+
+```
+[WL-MOUNT] mount com.ss.android.detail.feature.detail2.article.NewArticleDetailFragment
+  failed: java.lang.ClassCastException:
+  com.ss.android.article.news.activity.MainActivity cannot be cast to X.DQt
+```
+
+事务本身成功——`frags` 能看到它 `container=16908290`（`android.R.id.content`）
+`added=true`，回退栈涨到 2。卡的是**宿主契约**：`NewArticleDetailFragment` 把
+`getActivity()` 强转成 `X.DQt`，那是详情 Activity 实现的一个 9 方法接口
+（`getLeftSlideContainer` / `showPgcLayout` / `onFavorBtnClicked` /
+`getBuryStyleShow` / `getMultiEmojiEnable` / `getPushToArticleDetailStatic` /
+`hidePcgLayout` / `isContentViewOnTop` / `updateToolbarRepostIcon`），MainActivity 没有。
+
+所以详情页要在单容器里落地，**得让宿主满足 `X.DQt`**——给 MainActivity 补这个接口
+是结构性 dex 改动（加 interface + 9 个方法），不是等宽补丁，也不是适配层能从外面
+绕过去的。这是这条路上剩下的唯一一道门，位置很明确。
+
+新增脚本 `scripts/wl_mount.sh`（`SKIP_DETAIL=1` 跳过会污染 FragmentManager 的
+详情尝试；`CAND_OVERRIDE=` 指定要挂的类）。

@@ -23,7 +23,55 @@
 不是渲染缺陷**——热榜的 tab 确实切过去了（红色下划线在「热榜」上），
 渲染的是应用自己的「网络异常，请稍后重试」空态页。我没有伪造内容。
 
-## 详情页：这一轮把问题问清楚了
+## 单容器流转链路（2026-09-07 15:37，板端实测）
+
+跨窗口那条路走不通，就不再依赖它：把目标挂进宿主 Activity 自己的
+`android.R.id.content`（实测是 `androidx.appcompat.widget.ContentFrameLayout`），
+`FragmentTransaction` 挂上去是一次页面切换，不离开已经在屏幕上的窗口。
+
+| 步 | 画面 | 大小 | 证据 |
+|---|---|---|---|
+| 挂载前 | [`41-mount-before-feed.jpeg`](41-mount-before-feed.jpeg) | 219 KB | 完整信息流 |
+| 挂载后 | [`42-mount-page-in-container.jpeg`](42-mount-page-in-container.jpeg) | 44 KB | 新页整屏覆盖，频道栏与底部导航都被盖住 |
+| 物理返回后 | [`43-mount-after-back-feed.jpeg`](43-mount-after-back-feed.jpeg) | 219 KB | 信息流原样回来 |
+
+```
+[WL-MOUNT] mounted ...RecommendFragmentV4 as wl-mount-1 backStack=1
+[WL-INPUT] key 4 -> ViewRootImpl(...)
+[WL-MOUNT] pop ok backStack 1 -> 0
+[WL-BACK]  key: popped a mounted page, activity kept
+[WL-MOUNT] android.R.id.content = androidx.appcompat.widget.ContentFrameLayout children=2
+[WL-MOUNT] fm=androidx.fragment.app.FragmentManagerImpl backStack=0
+```
+
+全程 `alive=1`，Activity 没有被 finish —— `injectKey` 先问 `unmountFragment()`，
+有挂载页就弹页、没有才 finish，和真机上 FragmentManager 回退栈优先于
+`Activity.finish()` 的顺序一致。
+
+**42 号图要说清楚**：挂上去的是 `RecommendFragmentV4`——应用自己正在用的类，
+新起一个实例。它渲染出来的是应用自己的「当前网络不可用，点击重试」空态，
+因为这个新实例没有数据（还是 `device_id` 那条身份线）。
+**这不是详情页**，是用应用真实的 UI 证明容器内切与物理返回这条链路通了。
+
+## 详情页本身：挂得上去，但建不出视图
+
+真正的文章详情 fragment 挂载时报的是：
+
+```
+[WL-MOUNT] mount com.ss.android.detail.feature.detail2.article.NewArticleDetailFragment
+  failed: java.lang.ClassCastException:
+  com.ss.android.article.news.activity.MainActivity cannot be cast to X.DQt
+```
+
+事务本身是成功的——`frags` 能看到它 `container=16908290`（即 `android.R.id.content`）
+`added=true`，回退栈也涨到了 2。**卡在它的宿主契约**：`NewArticleDetailFragment`
+会把 `getActivity()` 强转成 `X.DQt`，那是详情 Activity 实现的一个 9 方法接口
+（`getLeftSlideContainer` / `showPgcLayout` / `onFavorBtnClicked` ...），MainActivity 没有。
+
+所以详情页要在单容器里落地，得让宿主满足 `X.DQt`。这是给宿主补接口的活
+（结构性 dex 改动，不是等宽补丁），不是适配层能从外面绕过去的。
+
+## 详情页跳转本身：这一轮把问题问清楚了
 
 点击信息流卡片，监听器确实跑：
 

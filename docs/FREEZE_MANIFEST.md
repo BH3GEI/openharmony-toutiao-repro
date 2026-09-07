@@ -216,6 +216,7 @@ total: 107
 | `mount <fqcn> [k=v ...]` | **新增**：把 Fragment 事务挂进 `android.R.id.content` |
 | `unmount` | **新增**：弹出一层挂载页 |
 | `frags` | **新增**：宿主 FragmentManager / 容器现状 |
+| — | 单容器链路板端已验证：挂载 → 整屏覆盖 → `key 4` 弹页 → 信息流回来，Activity 全程存活 |
 | `resume` | 给当前顶层窗口对应的 Activity 补一条 `ResumeActivityItem` |
 | `winfocus` / `acts` / `dump` / `stack` | 焦点、Activity 记录、窗口树、主线程栈 |
 
