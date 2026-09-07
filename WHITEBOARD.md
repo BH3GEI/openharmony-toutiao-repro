@@ -1306,3 +1306,88 @@ UnsupportedOperationException: Implement me
 `oh-adapter-runtime.jar.s2-038d3643` / `wl-launch-activity.keep`，仓库
 `prebuilts/oh-adapter-runtime.s2-*.jar`），借用窗口跑完立即还回，md5 已核对。
 两支 jar 的特性集互不包含，**二进制无法合并，要真正合流需要对方的源码**。
+
+## 第十九节：详情页问题问清楚了 —— 应用根本没调 startActivity（S1，2026-09-07）
+
+点击信息流卡片，监听器确实跑：
+
+```
+[WL-INPUT] click 400.0,620.0 handled by
+  com.ss.android.article.base.feature.feed.widget.FeedItemRootLinerLayout (0 levels up)
+```
+
+但 `ActivityThread.mActivities` 不变。之前一直卡在两种可能之间：**应用调了
+`startActivity` 而适配层丢了**，还是**应用根本没调**。分不清是因为
+`ActivityManagerAdapter.startActivity` 的日志走 hilog：
+
+```java
+// oh-adapter-framework.jar，反编译确认
+startActivity(...) {
+    logBridged("startActivity", "-> OH IAbilityManager.StartAbility");   // Log.d("OH_AMAdapter", "[BRIDGED] " + ...)
+    return bridgeStartAbility(...);                                       // -> nativeStartAbility
+}
+```
+
+`Log.d` 进 hilog，不进子进程 stderr——两边 grep 都查不到，等于一直没有证据。
+
+### 做法
+
+`hilog -b DEBUG` 打开 debug 级别，在点击前后抓 hilog。同一进程同一时刻的
+`[BRIDGED] getProcessesInErrorState` 在密集刷屏，证明抓取是活的、debug 没被过滤。
+结果：
+
+```
+[wl-screens] startActivity in hilog: 0
+```
+
+### 结论
+
+**应用压根没有调用 `startActivity`。** 点击处理器跑完就结束了，导航根本没发起。
+所以第 4 层不是"适配层丢了事务"，而是应用自己在发起跳转之前就放弃了。
+下一步该查那个监听器里 `startActivity` 之前的前置条件（多半仍是
+`device_id`/`install_id` 那条身份线，或者被某个 SDK 开关拦掉），
+而不是继续查 Activity 启动链路——那条路查错方向了。
+
+## 第二十节：WebView 承载频道 —— 需要一个具体的 WebSettings 子类（S1，2026-09-07）
+
+从热榜切到相邻频道时 `ViewPager` 会顺手创建相邻页，相邻的
+`CategoryBrowserFragment` 是 WebView 承载的：
+
+```
+NPE: WebSettings.getUserAgentString() on null
+  at MediaAppUtil.getWebViewDefaultUserAgent → BrowserFragment.initCustomUaIfNeed
+  at BrowserFragment.onActivityCreated(:2225)
+```
+
+中和 `initCustomUaIfNeed` 之后，它前进到同一个方法的**下一行**：
+
+```
+NPE: WebSettings.setGeolocationEnabled(boolean) on null
+  at BrowserFragment.onActivityCreated(:2230)
+```
+
+`onActivityCreated` 里是一整段 `getSettings().xxx()`，逐行中和是打地鼠，
+整方法中和又太狠。**真正的修法是让 `WebView.getSettings()` 返回非 null。**
+现在的 WebView 防崩代理做不到：`android.webkit.WebSettings` 是抽象类，
+`java.lang.reflect.Proxy` 只能实现接口。需要一个真正继承 `WebSettings`、
+把所有抽象方法实现掉的具体子类放进适配层 jar。
+
+这是详情页与 WebView 频道共同的下一层，也是目前最明确、可执行的下一个靶子。
+
+## 第二十一节：界面矩阵归档（S1，2026-09-07 14:24）
+
+`frames/screens/` 编号 35+ 是这一轮采集，脚本 `scripts/wl_screens.sh`，
+一次跑完全程 `alive=1`：
+
+| 界面 | 文件 | 状态 |
+|---|---|---|
+| 推荐频道流 | `35-feed-recommend.jpeg` 219 KB | ✅ 真实内容 |
+| 热榜频道流 | `36-hotlist-channel.jpeg` 78 KB | ⚠️ tab 切换成功，服务端空态 |
+| 视频频道流 | `37-video-channel.jpeg` 198 KB | ✅ 真实视频卡片 |
+| 搜索主界面 | `38-search-activity.jpeg` 44 KB | ✅ 上屏 |
+| 返回后信息流 | `40-back-from-search-live-feed.jpeg` 219 KB | ✅ 销毁搜索页后回到前台 |
+| 详情页 | `39-detail-click-no-startactivity.jpeg` | ❌ 未取得，见第十九节 |
+
+热榜的 tab 确实切过去了（红色下划线在「热榜」上），渲染的是应用自己的
+「网络异常，请稍后重试」空态——`shared_prefs` 无 `device_id`/`install_id`，
+服务端一律 `400 invalid user`。这是真实状态，不是渲染缺陷。

@@ -18,6 +18,7 @@ Every edit is byte-length preserving except the two zip-level ones:
   classes16.dex  X/4Li.a() "appName is empty" guard AppLog init
   classes16.dex  X/46Y.h(Z)V                        TrafficStats.getUid*Bytes
   classes18.dex  FontUtils.getByteNumberTypeface()  AssetManager.nativeOpenAssetFd
+  classes18.dex  BrowserFragment.initCustomUaIfNeed  WebSettings NPE (WebView 频道)
   classes20.dex  PrivateApiLancetImpl.<clinit>      MediaStore fields
   classes20.dex  X/BdA.<clinit>                     poisoned by X/3CD.a()
   classes21.dex  NewDetailActivity.preCreateWebView WebSettings NPE
@@ -112,6 +113,23 @@ DEX_PATCHES = {
     "classes18.dex": [
         (0x8430A8, bytes([0x62, 0x01, 0x1E, 0x89]), RETURN_NULL,
          "FontUtils.getByteNumberTypeface(): entry -> const/4 v0,#0 ; return-object v0"),
+        # BrowserFragment.initCustomUaIfNeed(Context)V
+        #
+        # The WebView-backed channels (CategoryBrowserFragment) ask the WebView
+        # for its user agent while the fragment is being created:
+        #   initCustomUaIfNeed -> MediaAppUtil.getCustomUserAgent
+        #     -> getWebViewDefaultUserAgent -> webView.getSettings().getUserAgentString()
+        # getSettings() is null here for the same reason preCreateWebView was --
+        # WebSettings is an abstract class, so the adapter's inert WebView
+        # provider cannot synthesise one.  ViewPager pre-creates adjacent pages,
+        # so simply moving between channels killed the process.
+        #
+        # NOTE this only buys one line: onActivityCreated goes straight on to
+        # getSettings().setGeolocationEnabled(...).  Neutralising that whole
+        # method would be too destructive; the real fix is a concrete
+        # WebSettings subclass in the adapter.  See frames/screens/README.md.
+        (0x85F45C, bytes([0x62, 0x01, 0x37, 0x8B]), RETURN_VOID + NOP2,
+         "BrowserFragment.initCustomUaIfNeed(): entry -> return-void ; nop"),
     ],
     "classes15.dex": [
         (0x7D63FC, bytes([0x62, 0x02, 0xA4, 0x7E]), RETURN_VOID + NOP2,
