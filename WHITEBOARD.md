@@ -1193,22 +1193,116 @@ Activity 销毁**都会在主线程抛出，没有任何 catch，`ActivityThread
 
 修完实测：整条 7 步巡检全程 `alive=1`，包括销毁那一步（此前 `alive=0`）。
 
-## 第十六节：销毁之后没人恢复下层 Activity（S1，2026-09-07）
+## 第十六节：销毁之后交还渲染权 —— 又拆了三层（S1，2026-09-07）
 
-搜索页销毁了，但屏幕变成一张空白窗口（38 KB）。原因是真机上 AMS 这时会给进程补发
-一条 `ResumeActivityItem`，这里没有：MainActivity 停在 `paused=true stopped=true`、
-decor 是 GONE。
+搜索页销毁了，但屏幕变成一张空白窗口（38 KB）。到这里为止一共又拆了三层。
 
-`resumeUnderlyingActivity()` 自己发这条事务——`ClientTransaction` +
-`ResumeActivityItem` + `ActivityThread.scheduleTransaction`，让 `TransactionExecutor`
-自己把生命周期从当前状态走到 RESUMED（restart→start→resume 顺序由它保证），
-再用 `WindowManagerGlobal.setStoppedState(token, false)` 解开 `ViewRootImpl.mStopped`
-（否则 root 拒绝 traverse，resume 了也不画），最后把焦点交还给新的顶层窗口。
+### 16.1 没人补发 `ResumeActivityItem`
 
-**这段代码尚未板端实测。** 板子被并行的微信工作流占用：
-`/data/pr03-74e6-portable/android/framework/oh-adapter-runtime.jar` 是两条流共用的
-同一个文件，本轮期间被换成了另一支构建（`WL-TAP` / `WL-CONSENT` / `WL-THEME-SYNC`，
-不含输入泵），我连跑三次都跑空。上面那次成功采集是借用窗口跑的，跑完已把对方的 jar
-原样还回（板端备份 `oh-adapter-runtime.jar.s2-97a158f7`，仓库备份
-`prebuilts/oh-adapter-runtime.s2-97a158f7.jar`，md5 `97a158f7577bba16a57d74c2da3b2af9`
-已核对）。两支 jar 特性集互不包含，**二进制合不了，要真正合流需要对方的源码**。
+真机上 AMS 这时会给进程补发一条 `ResumeActivityItem`，这里没有：MainActivity 停在
+`paused=true stopped=true`、decor 是 GONE。`resumeUnderlyingActivity()` 自己发这条事务
+（`ClientTransaction` + `ResumeActivityItem` + `ActivityThread.scheduleTransaction`，
+让 `TransactionExecutor` 自己把生命周期从当前状态走到 RESUMED），再用
+`WindowManagerGlobal.setStoppedState(token,false)` 解开 `ViewRootImpl.mStopped`。
+
+实测 `[WL-BACK] resumed MainActivity paused=false stopped=false`。
+
+**顺带修掉一个自己写出来的 bug。** 第一版用 `paused`/`stopped` 标志找"当前 Activity"，
+但这套环境里根本没有东西会 resume Activity——第二个 Activity 起来之后两条记录都是
+`paused=true stopped=true`，于是它挑中了 MainActivity，`escalateBack` 在 MainActivity 上
+调了 `onBackPressed()`。板端日志把这一幕拍得很清楚：
+
+```
+[WL-BACK] key: com.ss.android.article.news.activity.MainActivity not finishing; escalating
+[WL-BACK] decor.dispatchKeyEvent down=true up=true
+[WL-BACK] onBackPressed() returned
+[WL-BACK] nothing left to resume
+```
+
+改成用 **decor view 反查**：`ViewRootImpl.mView` 和 `activity.getWindow().peekDecorView()`
+做对象同一性比较——屏幕上那个窗口属于谁，就是谁。标志会骗人，屏幕不会。
+
+### 16.2 resume 一执行就崩 —— `AudioSystem.native_getMaxChannelCount` 缺失
+
+```
+UnsatisfiedLinkError: No implementation found for
+  int android.media.AudioSystem.native_getMaxChannelCount()
+    at AudioSystem.<clinit> → AudioManager.isWiredHeadsetOn
+    at HeadsetHelperOpt.m → VideoContext.onLifeCycleOnResume
+    at Activity.performResume ← ResumeActivityItem.execute
+```
+
+只在**逛过视频频道之后**才致命：`VideoContext` 那时才注册成生命周期观察者，此后每一次
+resume 都会去查有线耳机；`AudioSystem.<clinit>` 一失败这个类就永久废掉。
+应用侧中和 `HeadsetHelperOpt.m(Context)V` → `base.final12.apk`。平台侧建议补这个 native。
+
+### 16.3 Android 侧全绿，屏幕还是白的 —— OH scene 没有重新显示
+
+`[WL-BACK] showWindow: appVisible=true windowVisibility=0`：`dispatchAppVisibility(true)`
+（又一个 WMS 从不投递的回调，和焦点是同一类问题）补上之后 Android 侧完全恢复，
+但像素没回来。relayout 日志指明在 OH 那一侧：
+
+```
+[OH_WSA-relayout] session=32 ... visibility=8
+[OH_WSA-relayout] session=32 covered by newer sibling -> DEFER hide (flush on coverer show)
+```
+
+覆盖窗口被销毁并不会触发那个 "coverer show"，MainActivity 的 scene 就一直是隐藏的。
+当前做法是让 OH 自己把这个 ability 重新前台化（对同一个 MainActivity 再 `aa start`），
+**复用活进程、不重启**，屏幕立刻回到 219 KB 的活信息流。
+真正的修法应该是适配层在覆盖窗口销毁时补一次 scene show。
+
+## 第十七节：巡检闭环 8/8 跑通（S1，2026-09-07 13:31）
+
+| 步 | 界面 | 结果 |
+|---|---|---|
+| 1 | 推荐信息流 | ✅ 219 KB |
+| 2 | 视频频道 | ✅ 197 KB |
+| 3 | 回推荐流 | ✅ 219 KB |
+| 4 | 搜索页 | ✅ 上屏 |
+| 5 | 返回 | ✅ Activity 销毁 + 信息流回前台 219 KB |
+| 6 | 个人中心 | ⚠️ 画面活着，tab 没切 |
+| 7 | 回信息流 | ✅ |
+| 8 | 点详情卡片 | ⚠️ 监听器命中，未起新页 |
+
+全程 `alive=1`。第 6、8 步是诚实的"没到"，不是崩溃：进程活着、信息流在渲染
+（第一条标题已变灰＝点击确实生效），只是导航没发生。
+
+### 第 8 步顺手又拆掉一颗雷
+
+在视频上下文里点回信息流会走进 `PortraitPlaySliceView.dataBindingDuration`：
+
+```
+UnsupportedOperationException: Implement me
+  at android.content.res.AssetManager.nativeOpenAssetFd(Native Method)
+  at Typeface.createFromAsset → FontUtils.getByteNumberTypeface
+```
+
+`AssetManager.nativeOpenAssetFd` 在适配层里直接是一个未实现的 native。
+应用侧让 `FontUtils.getByteNumberTypeface(I)Landroid/graphics/Typeface;` 返回 null
+（Android 对 null Typeface 是合法的默认字体）→ `base.final13.apk`。
+为此给 `patches/tools/neutralize.py` 加了 `:null` 模式：
+入口 4 字节改成 `const/4 v0,#0 ; return-object v0`，同样等宽。
+
+平台侧待补的 native / API，本轮攒了三个：
+
+| 缺口 | 触发点 | 后果 |
+|---|---|---|
+| `TrafficStats.getUidRxBytes(int)` / `getUidTxBytes(int)` | `onActivityStopped` | 任何 Activity 销毁必死 |
+| `AudioSystem.native_getMaxChannelCount()` | `AudioManager.isWiredHeadsetOn` | 逛过视频频道后每次 resume 必死 |
+| `AssetManager.nativeOpenAssetFd` | `Typeface.createFromAsset` | 任何 assets 自定义字体必死 |
+
+## 第十八节：板端占用（S1，2026-09-07）
+
+`/data/pr03-74e6-portable/android/framework/oh-adapter-runtime.jar` 和
+`/data/local/tmp/wl-launch-activity` 是多条工作流共用的同一份文件。本轮采集期间它们被
+另一条流反复换掉：jar 被换成不含输入泵的构建（`WL-TAP` / `WL-CONSENT` /
+`WL-THEME-SYNC` / `WL-WCDB`），`wl-launch-activity` 被写成微信的 `MobileInputUI`，
+于是任何新起的适配层进程都会去实例化微信的 Activity，头条启动当场
+`ClassNotFoundException` 死掉。板子重启也会把 jar 恢复成对方那一支。
+这直接吃掉了本轮 6 次跑批。
+
+做法：把对方的 jar 与 `wl-launch-activity` 原样备份（板端
+`oh-adapter-runtime.jar.s2-038d3643` / `wl-launch-activity.keep`，仓库
+`prebuilts/oh-adapter-runtime.s2-*.jar`），借用窗口跑完立即还回，md5 已核对。
+两支 jar 的特性集互不包含，**二进制无法合并，要真正合流需要对方的源码**。

@@ -1019,7 +1019,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 resumeUnderlyingActivity(null);
             } else if ("back".equals(a[0])) {
                 Object top = topInputTarget();
-                Object act = topActivity();
+                Object act = top == null ? null : activityForWindow(top);
                 if (top == null || act == null) {
                     System.err.println("[WL-BACK] nothing to go back from");
                 } else {
@@ -1119,7 +1119,13 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         // top activity is not finishing a moment later the dispatch was eaten
         // somewhere we do not control, and we fall back to the two paths that
         // do not go through ViewRootImpl at all.
-        Object act = topActivity();
+        //
+        // Resolve the activity from the window we just dispatched into, not
+        // from the paused/stopped flags: nothing here resumes an activity, so
+        // when a second activity starts, *both* records read paused=true
+        // stopped=true and any flag-based guess picks the wrong one.  The decor
+        // view is unambiguous -- it is the thing on screen.
+        Object act = activityForWindow(vri);
         if (act == null) {
             System.err.println("[WL-BACK] no activity to check");
             return;
@@ -1146,9 +1152,13 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
      * the right order -- and then hand it the window focus too.
      */
     private static void resumeUnderlyingActivity(Object finished) {
-        for (int waited = 0; waited < 4000; waited += 200) {
-            try { Thread.sleep(200); } catch (InterruptedException ignored) { return; }
-            Object rec = topActivityRecord(finished);
+        for (int waited = 0; waited < 6000; waited += 300) {
+            try { Thread.sleep(300); } catch (InterruptedException ignored) { return; }
+            // Re-query every round: the finished activity's window is torn down
+            // asynchronously, and only once it is out of mRoots does
+            // topInputTarget() name the window that is now on screen.
+            Object rec = recordForWindow(topInputTargetQuiet(), finished);
+            if (rec == null) rec = topActivityRecord(finished);
             if (rec == null) continue;
             Object act = readFieldValue(rec, "activity");
             if (act == null) continue;
@@ -1172,11 +1182,58 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 System.err.println("[WL-BACK] resumed " + act.getClass().getName()
                         + " paused=" + readFieldValue(rec, "paused")
                         + " stopped=" + readFieldValue(rec, "stopped"));
+                showWindow(act);
                 refocusTop();
             }
             return;
         }
         System.err.println("[WL-BACK] nothing left to resume");
+    }
+
+    /**
+     * The activity that owns this ViewRootImpl, matched by decor view.
+     *
+     * ActivityClientRecord.token would work too, but the decor is a direct
+     * object identity check against what ViewRootImpl is actually showing, with
+     * no dependency on how the adapter hands out window tokens.
+     */
+    private static Object activityForWindow(Object vri) {
+        Object rec = recordForWindow(vri, null);
+        Object act = rec == null ? null : readFieldValue(rec, "activity");
+        return act != null ? act : topActivity();
+    }
+
+    private static Object recordForWindow(Object vri, Object exclude) {
+        if (vri == null) return null;
+        Object decor = readFieldValue(vri, "mView");
+        if (decor == null) return null;
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object cur = at.getMethod("currentActivityThread").invoke(null);
+            Object map = readField(at, cur, "mActivities");
+            if (!(map instanceof Map)) return null;
+            for (Object rec : ((Map<?, ?>) map).values()) {
+                if (rec == null) continue;
+                Object act = readFieldValue(rec, "activity");
+                if (act == null || act == exclude) continue;
+                Object win = findMethod(act.getClass(), "getWindow").invoke(act);
+                if (win == null) continue;
+                Method peek = findMethod(win.getClass(), "peekDecorView");
+                peek.setAccessible(true);
+                if (peek.invoke(win) == decor) return rec;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** topInputTarget() without the "no laid-out window" complaint. */
+    private static Object topInputTargetQuiet() {
+        try {
+            return topInputTarget();
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /** The frontmost record that is not the activity we just finished. */
@@ -1282,6 +1339,70 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             System.err.println("[WL-BACK] setStoppedState(false)");
         } catch (Throwable t) {
             System.err.println("[WL-BACK] setStoppedState failed: " + t);
+        }
+    }
+
+    /**
+     * Make the resumed activity's window draw again.
+     *
+     * Resuming the activity is not enough: while the search window was up, this
+     * one went to mWindowVisibility=8 (GONE) and mAppVisible=false.  On a real
+     * device WMS calls IWindow.dispatchAppVisibility(true) when the covering
+     * window goes away; the adapter never does, so the root keeps skipping
+     * traversals and the screen stays blank.  ViewRootImpl.dispatchAppVisibility
+     * is that callback's landing point -- same shape of fix as the focus one.
+     */
+    private static void showWindow(Object act) {
+        try {
+            Object win = findMethod(act.getClass(), "getWindow").invoke(act);
+            Object decor = win == null ? null
+                    : findMethod(win.getClass(), "peekDecorView").invoke(win);
+            if (decor == null) { System.err.println("[WL-BACK] no decor to show"); return; }
+            Object vri = null;
+            Class<?> wmg = Class.forName("android.view.WindowManagerGlobal");
+            Object inst = wmg.getMethod("getInstance").invoke(null);
+            List<?> roots = (List<?>) readField(wmg, inst, "mRoots");
+            for (int i = 0; roots != null && i < roots.size(); i++) {
+                if (readFieldValue(roots.get(i), "mView") == decor) { vri = roots.get(i); break; }
+            }
+            if (vri == null) { System.err.println("[WL-BACK] no root for decor"); return; }
+
+            Method m = findMethod(vri.getClass(), "dispatchAppVisibility", boolean.class);
+            if (m != null) {
+                m.setAccessible(true);
+                m.invoke(vri, Boolean.TRUE);
+            } else {
+                writeBool(vri, "mAppVisible", true);
+            }
+            try { Thread.sleep(400); } catch (InterruptedException ignored) {}
+
+            // dispatchAppVisibility only queues the change; make sure the decor
+            // itself is not still GONE and ask for a traversal either way.
+            final Object dv = decor;
+            runOnMainSync(new Runnable() {
+                @Override public void run() {
+                    try {
+                        Method setVis = findMethod(dv.getClass(), "setVisibility", int.class);
+                        setVis.setAccessible(true);
+                        setVis.invoke(dv, Integer.valueOf(0 /* VISIBLE */));
+                        Method rl = findMethod(dv.getClass(), "requestLayout");
+                        rl.setAccessible(true);
+                        rl.invoke(dv);
+                        Method inv = findMethod(dv.getClass(), "invalidate");
+                        inv.setAccessible(true);
+                        inv.invoke(dv);
+                    } catch (Throwable t) {
+                        System.err.println("[WL-BACK] decor refresh failed: " + t);
+                    }
+                }
+            }, 3000);
+            try { Thread.sleep(600); } catch (InterruptedException ignored) {}
+            Object ai = readFieldValue(vri, "mAttachInfo");
+            System.err.println("[WL-BACK] showWindow: appVisible="
+                    + readFieldValue(vri, "mAppVisible")
+                    + " windowVisibility=" + readFieldValue(ai, "mWindowVisibility"));
+        } catch (Throwable t) {
+            System.err.println("[WL-BACK] showWindow failed: " + t);
         }
     }
 

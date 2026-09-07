@@ -1,7 +1,9 @@
 """
 Generic: make a dex method return immediately.
 
-Usage: neutralize.py <in.apk> <out.apk> <entry.dex>:<code_off>[:<label>] ...
+Usage: neutralize.py <in.apk> <out.apk> <entry.dex>:<code_off>[:<label>[:null]] ...
+
+`:null` makes an object-returning method return null instead of returning void.
 
 The delayInit path in ArticleMainActivity walks into one adapter gap after
 another, each one an UnsatisfiedLinkError / NoSuchFieldError on the *main*
@@ -21,20 +23,32 @@ or wider, which would shift every later offset.
 """
 import zipfile, zlib, hashlib, struct, os, sys
 
-# opcode -> mnemonic, all 4-byte field accesses that commonly open a method
-ENTRY_OPS = {0x52: 'iget', 0x54: 'iget-object', 0x60: 'sget', 0x62: 'sget-object'}
+# opcode -> mnemonic, 4-byte 21c/22c instructions that commonly open a method
+ENTRY_OPS = {0x22: 'new-instance', 0x52: 'iget', 0x54: 'iget-object',
+             0x60: 'sget', 0x62: 'sget-object'}
 
-def neutralize(raw, code_off, label):
+# return-void ; nop            -- void methods
+RET_VOID = bytes([0x0e, 0x00, 0x00, 0x00])
+# const/4 v0,#0 ; return-object v0  -- reference-returning methods
+RET_NULL = bytes([0x12, 0x00, 0x11, 0x00])
+
+def neutralize(raw, code_off, label, ret_null=False):
     b=bytearray(raw)
     insns=code_off+16
     op=b[insns]
     assert op in ENTRY_OPS, (f"{label}: entry opcode 0x{op:02x} is not a 4-byte field "
                              f"access ({', '.join(ENTRY_OPS.values())}); refusing to "
                              f"rewrite, it would change the encoded width")
-    b[insns:insns+4]=bytes([0x0e,0x00,0x00,0x00])   # return-void ; nop
+    if ret_null:
+        # `const/4 v0` needs v0 to exist.  registers_size is the first u2 of the
+        # code item; every real method has at least one register, but check.
+        regs=struct.unpack_from('<H', b, code_off)[0]
+        assert regs >= 1, f"{label}: registers_size={regs}, no v0 to null out"
+    b[insns:insns+4]=RET_NULL if ret_null else RET_VOID
     b[12:32]=hashlib.sha1(bytes(b[32:])).digest()
     struct.pack_into('<I', b, 8, zlib.adler32(bytes(b[12:])) & 0xffffffff)
-    print(f"  {label}: code_off=0x{code_off:x} entry -> return-void")
+    what='return null' if ret_null else 'return-void'
+    print(f"  {label}: code_off=0x{code_off:x} entry -> {what}")
     return bytes(b)
 
 SRC, DST = sys.argv[1], sys.argv[2]
@@ -43,7 +57,8 @@ for spec in sys.argv[3:]:
     parts=spec.split(':')
     entry, off = parts[0], int(parts[1],16)
     label = parts[2] if len(parts)>2 else entry
-    jobs.setdefault(entry, []).append((off,label))
+    ret_null = len(parts)>3 and parts[3]=='null'
+    jobs.setdefault(entry, []).append((off,label,ret_null))
 
 zin=zipfile.ZipFile(SRC); fin=open(SRC,'rb'); out=open(DST,'wb'); central=[]
 def dostime(dt): return ((dt[0]-1980)<<25)|(dt[1]<<21)|(dt[2]<<16)|(dt[3]<<11)|(dt[4]<<5)|(dt[5]//2)
@@ -55,8 +70,8 @@ for zi in zin.infolist():
     if zi.filename in jobs:
         raw=zlib.decompress(data,-15) if zi.compress_type==zipfile.ZIP_DEFLATED else data
         print(f"patching {zi.filename}")
-        for off,label in jobs[zi.filename]:
-            raw=neutralize(raw, off, label)
+        for off,label,ret_null in jobs[zi.filename]:
+            raw=neutralize(raw, off, label, ret_null)
         crc=zlib.crc32(raw)&0xffffffff
         c=zlib.compressobj(9,zlib.DEFLATED,-15); data=c.compress(raw)+c.flush()
         usize, csize = len(raw), len(data)

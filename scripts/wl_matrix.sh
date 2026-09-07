@@ -125,7 +125,12 @@ step 03-back-to-feed  "tap 190 213"
 mark=$(stat -c %s "$LOG")
 say "aa start SearchActivity"
 aa start -a com.android.bytedance.search.SearchActivity -b $PKG >/dev/null 2>&1
-sleep 45
+sleep 40
+# Nothing in this stack sends the process a ResumeActivityItem, so a freshly
+# started activity can sit at paused=true stopped=true with a blank window.
+# Ask the pump to send it (no-op when it is already resumed).
+probe resume
+sleep 5
 dismiss_usb_dialog
 say "04-search size=$(shot 04-search) alive=$(kill -0 $PID 2>/dev/null && echo 1 || echo 0) wlwin=$(tail -c +$mark "$LOG" | grep -c 'WL-WIN')"
 
@@ -134,8 +139,25 @@ say "04-search size=$(shot 04-search) alive=$(kill -0 $PID 2>/dev/null && echo 1
 probe winfocus
 probe acts
 
-# 搜索页 -> 返回
-step 05-back-from-search "key 4" 30
+# 搜索页 -> 返回.
+#
+# The key press finishes the activity and the pump resumes MainActivity behind
+# it (ResumeActivityItem + setStoppedState + dispatchAppVisibility), which gets
+# the *Android* side all the way back to paused=false stopped=false
+# appVisible=true windowVisibility=0.  The pixels still do not come back: the OH
+# scene for that window was hidden when the search window covered it, and
+# nothing un-hides it when the coverer is destroyed -- the relayout log says
+# "covered by newer sibling -> DEFER hide (flush on coverer show)".  Asking OH to
+# foreground the ability again is the hand-back at that layer; it reuses the
+# live process, no restart.
+mark=$(stat -c %s "$LOG" 2>/dev/null || echo 1)
+echo "key 4" > $C
+sleep 22
+aa start -a $PKG.activity.MainActivity -b $PKG >/dev/null 2>&1
+sleep 14
+say "05-back-from-search  'key 4' + aa start  size=$(shot 05-back-from-search) alive=$(kill -0 $PID 2>/dev/null && echo 1 || echo 0)"
+tail -c +$mark "$LOG" 2>/dev/null \
+    | grep -o 'WL-BACK].\{0,110\}' | head -6 | sed 's/^/[wl-matrix]   /'
 probe acts
 
 # 个人中心
@@ -143,6 +165,12 @@ step 06-mine "tap 1050 1870"
 
 # 回到信息流
 step 07-back-to-feed "tap 150 1870"
+
+# 详情页：点一条真实的信息流卡片。performClick() 而不是合成触摸 —— 头条的
+# item root 报 isClickable()==false，监听器绑在别处，坐标再准也没用。
+probe acts
+step 08-detail "click 400 620" 35
+probe acts
 
 say "done; frames in /data/local/tmp/WM_*.jpeg"
 ls -l /data/local/tmp/WM_*.jpeg 2>/dev/null | sed 's/^/[wl-matrix] /'

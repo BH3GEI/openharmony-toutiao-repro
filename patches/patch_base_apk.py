@@ -7,13 +7,20 @@ to render its MainActivity first frame on the OpenHarmony a2oh adapter.
 
     python3 patches/patch_base_apk.py <input base.apk> [-o out.apk]
 
-Six edits, all byte-length preserving except the two zip-level ones:
+Every edit is byte-length preserving except the two zip-level ones:
 
   classes6.dex   AsyncImageView.<clinit>            ColorMatrix
+  classes6.dex   initEmojiIconLayout()              missing emoticon.conf
   classes8.dex   HeadsetHelperOpt.p()V              AudioPortEventHandler JNI
+  classes8.dex   HeadsetHelperOpt.m(Context)V       AudioSystem native missing
   classes15.dex  ArticleMainActivity.delayInit()V   delayInit landmine chain
+  classes15.dex  X/3CD.a()                          empty external volume list
   classes16.dex  X/4Li.a() "appName is empty" guard AppLog init
+  classes16.dex  X/46Y.h(Z)V                        TrafficStats.getUid*Bytes
+  classes18.dex  FontUtils.getByteNumberTypeface()  AssetManager.nativeOpenAssetFd
   classes20.dex  PrivateApiLancetImpl.<clinit>      MediaStore fields
+  classes20.dex  X/BdA.<clinit>                     poisoned by X/3CD.a()
+  classes21.dex  NewDetailActivity.preCreateWebView WebSettings NPE
   + add    classes22.dex                            conscrypt presence shim
   - remove lib/arm64-v8a/libnpth.so                  fdsan ABI clash
 
@@ -55,6 +62,8 @@ REFERENCE_INPUT_SHA256 = "b6423fdc6d30c07e7f8316755d0657abd184d66aac99891ec81d55
 
 NOP2 = bytes([0x00, 0x00])
 RETURN_VOID = bytes([0x0E, 0x00])
+# const/4 v0,#0 ; return-object v0 -- 4 bytes, for reference-returning methods
+RETURN_NULL = bytes([0x12, 0x00, 0x11, 0x00])
 
 # entry -> list of (file offset, expected original bytes, replacement, description)
 DEX_PATCHES = {
@@ -74,6 +83,35 @@ DEX_PATCHES = {
     "classes8.dex": [
         (0x74BB08, bytes([0x62, 0x02, 0x8E, 0x7A]), RETURN_VOID + NOP2,
          "HeadsetHelperOpt.p()V: entry -> return-void ; nop"),
+        # HeadsetHelperOpt.m(Context)V -- the other half of the same problem.
+        #
+        # VideoContext registers itself as an activity lifecycle observer the
+        # first time you open the video channel, and from then on every resume
+        # runs onLifeCycleOnResume -> HeadsetHelperOpt.m -> isWiredHeadsetOn().
+        # That touches android.media.AudioSystem, whose <clinit> calls
+        # native_getMaxChannelCount(), which the adapter does not implement:
+        #   UnsatisfiedLinkError -> AudioSystem is erroneous forever
+        #   -> the exception escapes Activity.performResume on the main thread.
+        #
+        # So after visiting the video channel once, *every* later resume killed
+        # the process -- which is exactly what pressing BACK triggers.
+        (0x7B21AC, bytes([0x22, 0x00, 0x86, 0x33]), RETURN_VOID + NOP2,
+         "HeadsetHelperOpt.m(Context)V: entry -> return-void ; nop"),
+    ],
+    # FontUtils.getByteNumberTypeface(I)Landroid/graphics/Typeface;
+    #
+    # Typeface.createFromAsset -> AssetManager.openFd -> nativeOpenAssetFd,
+    # which the adapter answers with UnsupportedOperationException("Implement
+    # me").  The video player's portrait slice asks for this font while binding
+    # its duration label, on the main thread, so returning to the feed from a
+    # video context killed the process.
+    #
+    # Returning null is well defined here -- every Typeface setter treats null
+    # as "use the default".  This is the first patch that returns a reference
+    # rather than void: const/4 v0,#0 ; return-object v0 is also 4 bytes.
+    "classes18.dex": [
+        (0x8430A8, bytes([0x62, 0x01, 0x1E, 0x89]), RETURN_NULL,
+         "FontUtils.getByteNumberTypeface(): entry -> const/4 v0,#0 ; return-object v0"),
     ],
     "classes15.dex": [
         (0x7D63FC, bytes([0x62, 0x02, 0xA4, 0x7E]), RETURN_VOID + NOP2,
