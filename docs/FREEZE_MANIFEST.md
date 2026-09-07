@@ -252,4 +252,8 @@ total: 107
 | 仓库 | `git@github.com:BH3GEI/openharmony-toutiao-repro.git` |
 
 本文件第 1 节的四个 sha256 就是这个 commit 的树上算出来的（jar 与 apk 不入库，
-按第 2 节复现后核对）。之后前线若再动交互层，会另起一份清单，不改这一份。
+按第 2 节复现后核对）。
+
+单容器导航（`mount` / `unmount` / `frags`）与 `InertWebSettings` 是在这之后加的，
+板端验证记录见 whiteboard 第二十三节，验证时的 commit 为 `fbb68c5676939008941b164f306eead57ce44be3`，
+jar md5 `b2ed98fc6b7baab9d862103c241e4720`。产线合流以该 commit 为准。
