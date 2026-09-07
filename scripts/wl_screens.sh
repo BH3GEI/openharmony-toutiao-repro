@@ -102,12 +102,14 @@ sleep 12
 dismiss_usb_dialog
 say "01-feed-recommend size=$(shot 01-feed-recommend)"
 
-# 视频频道先走：热榜留到最后。ViewPager 会顺手创建相邻页，而相邻的
+# 推荐 -> 热榜 -> 视频 是此前必崩的顺序：ViewPager 会顺手创建相邻页，而相邻的
 # CategoryBrowserFragment 是 WebView 承载的，onActivityCreated 里一整段
-# getSettings().xxx() 会在 getSettings() 为 null 时打死进程（见下方说明），
-# 所以先把不受影响的界面都取到手。
-screen 02-video-channel "tap 560 213"
-screen 03-back-to-feed  "tap 190 213"
+# getSettings().xxx() 在 getSettings() 返回 null 时逐行 NPE。适配层现在有
+# westlake.webview.InertWebSettings（真正的 WebSettings 子类），这一段就是它的
+# 实测：跑得过去就说明 getSettings() 不再是 null。
+screen 02-hotlist       "tap 320 213"
+screen 03-video-channel "tap 560 213"
+screen 04-back-to-feed  "tap 190 213"
 
 # 搜索页：没有可用的界面入口，直接拉起 Activity，再补一条 resume
 # （这套环境里没有任何东西会 resume 一个新起的 Activity）。
@@ -117,14 +119,14 @@ sleep 40
 echo "resume" > $C
 sleep 6
 dismiss_usb_dialog
-say "04-search size=$(shot 04-search) alive=$(kill -0 $PID 2>/dev/null && echo 1 || echo 0)"
+say "05-search size=$(shot 05-search) alive=$(kill -0 $PID 2>/dev/null && echo 1 || echo 0)"
 
 # 返回信息流：按键销毁 + 让 OH 把 ability 重新前台化
 echo "key 4" > $C
 sleep 22
 aa start -a $PKG.activity.MainActivity -b $PKG >/dev/null 2>&1
 sleep 14
-say "05-back-to-feed size=$(shot 05-back-to-feed) alive=$(kill -0 $PID 2>/dev/null && echo 1 || echo 0)"
+say "06-back-to-feed size=$(shot 06-back-to-feed) alive=$(kill -0 $PID 2>/dev/null && echo 1 || echo 0)"
 
 # ---- 详情页探针 ----
 say "==== detail probe ===="
@@ -137,15 +139,12 @@ mark=$(stat -c %s "$LOG")
 echo "click 400 620" > $C
 sleep 35
 kill -9 $HLPID 2>/dev/null
-say "06-detail size=$(shot 06-detail) alive=$(kill -0 $PID 2>/dev/null && echo 1 || echo 0)"
+say "07-detail size=$(shot 07-detail) alive=$(kill -0 $PID 2>/dev/null && echo 1 || echo 0)"
 tail -c +$mark "$LOG" 2>/dev/null \
     | grep -o 'WL-INPUT].\{0,120\}\|WL-ACTS].\{0,90\}' | head -6 | sed 's/^/[wl-screens]   /'
 say "hilog OH_AMAdapter lines across the click:"
 grep 'OH_AMAdapter' $HL 2>/dev/null | tail -12 | cut -c1-170 | sed 's/^/[wl-screens]   /'
 say "startActivity in hilog: $(grep -c 'BRIDGED. startActivity\|StartAbility' $HL 2>/dev/null)"
-
-# 热榜最后取：它是这一轮唯一会打死进程的界面，放最后就不会影响其它格。
-screen 07-hotlist "tap 320 213"
 
 say "done; frames in /data/local/tmp/SC_*.jpeg"
 ls -l /data/local/tmp/SC_*.jpeg 2>/dev/null | sed 's/^/[wl-screens] /'

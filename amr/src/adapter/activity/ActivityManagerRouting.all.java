@@ -1017,6 +1017,16 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 dumpWindowFocus();
             } else if ("resume".equals(a[0])) {
                 resumeUnderlyingActivity(null);
+            } else if ("frags".equals(a[0])) {
+                dumpFragments();
+            } else if ("mount".equals(a[0]) && a.length >= 2) {
+                String[] rest = new String[a.length - 2];
+                System.arraycopy(a, 2, rest, 0, rest.length);
+                mountFragment(a[1], rest);
+            } else if ("unmount".equals(a[0])) {
+                if (!unmountFragment()) {
+                    System.err.println("[WL-MOUNT] nothing mounted to pop");
+                }
             } else if ("back".equals(a[0])) {
                 Object top = topInputTarget();
                 Object act = top == null ? null : activityForWindow(top);
@@ -1114,6 +1124,16 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 + " focus=" + hasWindowFocus(vri));
 
         if (keyCode != KEYCODE_BACK) return;
+
+        // Single-container navigation gets first refusal on BACK: if this pump
+        // mounted a page into android.R.id.content, popping it *is* the back,
+        // and the activity must not be finished underneath it.  Same order a
+        // device uses (FragmentManager back stack before Activity.finish()).
+        if (unmountFragment()) {
+            System.err.println("[WL-BACK] key: popped a mounted page, activity kept");
+            refocusTop();
+            return;
+        }
 
         // BACK is the one key whose effect we can verify, so verify it.  If the
         // top activity is not finishing a moment later the dispatch was eaten
@@ -1413,6 +1433,243 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             if (vri != null) focusOnly(vri);
         } catch (Throwable ignored) {
         }
+    }
+
+    /* ------------------------------------------------------------------
+     * Single-container navigation
+     *
+     * Clicking a feed card never produces a second Activity here.  Rather than
+     * keep chasing the cross-window path, mount the destination *inside the
+     * host Activity's own content view*: android.R.id.content is an ordinary
+     * FrameLayout, and a FragmentTransaction onto it is a page transition that
+     * never leaves the window that is already on screen.
+     *
+     * BACK then has to mean two different things depending on depth, exactly
+     * as it does on a device: pop the mounted page if there is one, finish the
+     * activity if there is not.  injectKey() checks unmountFragment() first.
+     *
+     * Everything is reflective: this jar does not compile against androidx, and
+     * the app's fragments are androidx ones, so the transaction is driven
+     * through FragmentActivity.getSupportFragmentManager() when it exists and
+     * the framework FragmentManager otherwise.
+     * ------------------------------------------------------------------ */
+
+    private static final int ANDROID_R_ID_CONTENT = 0x01020002;
+    /** How many pages this pump has pushed; the back stack tags are wl-mount-N. */
+    private static int sMountDepth;
+
+    /** The fragment manager the host activity actually uses. */
+    private static Object fragmentManager(Object act) {
+        Method m = findMethod(act.getClass(), "getSupportFragmentManager");
+        if (m == null) m = findMethod(act.getClass(), "getFragmentManager");
+        if (m == null) return null;
+        try {
+            m.setAccessible(true);
+            return m.invoke(act);
+        } catch (Throwable t) {
+            System.err.println("[WL-MOUNT] fragment manager unavailable: " + t);
+            return null;
+        }
+    }
+
+    /** What is already in the host container, and what is on the back stack. */
+    private static void dumpFragments() {
+        try {
+            Object vri = topInputTarget();
+            Object act = vri == null ? null : activityForWindow(vri);
+            if (act == null) { System.err.println("[WL-MOUNT] no host activity"); return; }
+            System.err.println("[WL-MOUNT] host=" + act.getClass().getName());
+
+            Object decor = readFieldValue(vri, "mView");
+            Object content = decor == null ? null : findViewById(decor, ANDROID_R_ID_CONTENT);
+            System.err.println("[WL-MOUNT] android.R.id.content = "
+                    + (content == null ? "null" : content.getClass().getName()
+                       + " children=" + viewChildCount(content)));
+
+            Object fm = fragmentManager(act);
+            if (fm == null) { System.err.println("[WL-MOUNT] no fragment manager"); return; }
+            System.err.println("[WL-MOUNT] fm=" + fm.getClass().getName()
+                    + " backStack=" + intMethod(fm, "getBackStackEntryCount"));
+            Method get = findMethod(fm.getClass(), "getFragments");
+            if (get != null) {
+                get.setAccessible(true);
+                Object list = get.invoke(fm);
+                if (list instanceof List) {
+                    List<?> l = (List<?>) list;
+                    System.err.println("[WL-MOUNT] " + l.size() + " fragment(s)");
+                    for (Object f : l) {
+                        if (f == null) continue;
+                        System.err.println("[WL-MOUNT]   " + f.getClass().getName()
+                                + " id=" + readFieldValue(f, "mFragmentId")
+                                + " container=" + readFieldValue(f, "mContainerId")
+                                + " added=" + readFieldValue(f, "mAdded"));
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[WL-MOUNT] frags failed: " + t);
+        }
+    }
+
+    /**
+     * Put a fragment on screen inside the host container.
+     *
+     * Extra arguments are `key=value` pairs; they go into the fragment's
+     * Bundle as strings, or as longs when they parse as one -- the article
+     * detail fragments key off numeric ids (groupId / itemId), and a String
+     * where a long is expected is the difference between a page and a crash.
+     */
+    private static void mountFragment(final String fqcn, final String[] kv) {
+        final Object vri;
+        final Object act;
+        try {
+            vri = topInputTarget();
+            act = vri == null ? null : activityForWindow(vri);
+        } catch (Throwable t) {
+            System.err.println("[WL-MOUNT] no host: " + t);
+            return;
+        }
+        if (act == null) { System.err.println("[WL-MOUNT] no host activity"); return; }
+        final Object fm = fragmentManager(act);
+        if (fm == null) { System.err.println("[WL-MOUNT] no fragment manager"); return; }
+
+        runOnMainSync(new Runnable() {
+            @Override public void run() {
+                try {
+                    Class<?> fc = Class.forName(fqcn, true, act.getClass().getClassLoader());
+                    Object frag = fc.getDeclaredConstructor().newInstance();
+
+                    if (kv.length > 0) {
+                        Class<?> bundleCls = Class.forName("android.os.Bundle");
+                        Object b = bundleCls.getDeclaredConstructor().newInstance();
+                        Method putL = bundleCls.getMethod("putLong", String.class, long.class);
+                        Method putS = bundleCls.getMethod("putString", String.class, String.class);
+                        for (String pair : kv) {
+                            int eq = pair.indexOf('=');
+                            if (eq <= 0) continue;
+                            String k = pair.substring(0, eq), v = pair.substring(eq + 1);
+                            try {
+                                putL.invoke(b, k, Long.valueOf(Long.parseLong(v)));
+                            } catch (NumberFormatException nfe) {
+                                putS.invoke(b, k, v);
+                            }
+                        }
+                        Method setArgs = findMethod(fc, "setArguments", bundleCls);
+                        if (setArgs != null) { setArgs.setAccessible(true); setArgs.invoke(frag, b); }
+                    }
+
+                    Method begin = findMethod(fm.getClass(), "beginTransaction");
+                    begin.setAccessible(true);
+                    Object tx = begin.invoke(fm);
+
+                    String tag = "wl-mount-" + (++sMountDepth);
+                    Method add = null;
+                    for (Method m : tx.getClass().getMethods()) {
+                        if (!"add".equals(m.getName())) continue;
+                        Class<?>[] p = m.getParameterTypes();
+                        if (p.length == 3 && p[0] == int.class && p[2] == String.class) {
+                            add = m; break;
+                        }
+                    }
+                    if (add == null) { System.err.println("[WL-MOUNT] no add(int,F,String)"); return; }
+                    add.setAccessible(true);
+                    Object tx2 = add.invoke(tx, Integer.valueOf(ANDROID_R_ID_CONTENT), frag, tag);
+                    if (tx2 == null) tx2 = tx;
+
+                    Method back = findMethod(tx2.getClass(), "addToBackStack", String.class);
+                    if (back != null) { back.setAccessible(true); tx2 = orSelf(back.invoke(tx2, tag), tx2); }
+
+                    Method commit = findMethod(tx2.getClass(), "commitAllowingStateLoss");
+                    if (commit == null) commit = findMethod(tx2.getClass(), "commit");
+                    commit.setAccessible(true);
+                    commit.invoke(tx2);
+
+                    Method exec = findMethod(fm.getClass(), "executePendingTransactions");
+                    if (exec != null) { exec.setAccessible(true); exec.invoke(fm); }
+
+                    System.err.println("[WL-MOUNT] mounted " + fqcn + " as " + tag
+                            + " backStack=" + intMethod(fm, "getBackStackEntryCount"));
+                } catch (Throwable t) {
+                    Throwable c = t;
+                    while (c instanceof InvocationTargetException
+                            && ((InvocationTargetException) c).getTargetException() != null) {
+                        c = ((InvocationTargetException) c).getTargetException();
+                    }
+                    System.err.println("[WL-MOUNT] mount " + fqcn + " failed: " + c);
+                    StackTraceElement[] st = c.getStackTrace();
+                    for (int i = 0; i < st.length && i < 12; i++) {
+                        System.err.println("[WL-MOUNT]   at " + st[i]);
+                    }
+                }
+            }
+        }, 8000);
+    }
+
+    private static Object orSelf(Object maybe, Object self) { return maybe != null ? maybe : self; }
+
+    /**
+     * Pop one mounted page.  Returns true when something was actually popped,
+     * which is what tells injectKey() that BACK is already spent.
+     */
+    private static boolean unmountFragment() {
+        try {
+            Object vri = topInputTarget();
+            Object act = vri == null ? null : activityForWindow(vri);
+            if (act == null) return false;
+            final Object fm = fragmentManager(act);
+            if (fm == null) return false;
+            int before = intMethod(fm, "getBackStackEntryCount");
+            if (before <= 0) return false;
+
+            final boolean[] popped = new boolean[1];
+            runOnMainSync(new Runnable() {
+                @Override public void run() {
+                    try {
+                        Method pop = findMethod(fm.getClass(), "popBackStackImmediate");
+                        if (pop == null) return;
+                        pop.setAccessible(true);
+                        Object r = pop.invoke(fm);
+                        popped[0] = (r instanceof Boolean) && ((Boolean) r).booleanValue();
+                    } catch (Throwable t) {
+                        System.err.println("[WL-MOUNT] pop failed: " + t);
+                    }
+                }
+            }, 5000);
+
+            int after = intMethod(fm, "getBackStackEntryCount");
+            System.err.println("[WL-MOUNT] pop " + (popped[0] ? "ok" : "no-op")
+                    + " backStack " + before + " -> " + after);
+            return popped[0] || after < before;
+        } catch (Throwable t) {
+            System.err.println("[WL-MOUNT] unmount failed: " + t);
+            return false;
+        }
+    }
+
+    private static int intMethod(Object target, String name) {
+        try {
+            Method m = findMethod(target.getClass(), name);
+            if (m == null) return -1;
+            m.setAccessible(true);
+            return ((Integer) m.invoke(target)).intValue();
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    private static Object findViewById(Object view, int id) {
+        try {
+            Method m = findMethod(view.getClass(), "findViewById", int.class);
+            if (m == null) return null;
+            m.setAccessible(true);
+            return m.invoke(view, Integer.valueOf(id));
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static int viewChildCount(Object viewGroup) {
+        return intMethod(viewGroup, "getChildCount");
     }
 
     /**
@@ -2039,6 +2296,40 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         }
     }
 
+    private static volatile Object sWebSettings;
+    private static volatile boolean sWebSettingsFailed;
+
+    /**
+     * One shared InertWebSettings, when the caller wants a WebSettings.
+     *
+     * Shared rather than per-call because the app compares the object it got
+     * from getSettings() across calls, and because nothing in it is stateful.
+     */
+    private static Object inertWebSettings(Class<?> want) {
+        if (sWebSettingsFailed) return null;
+        try {
+            if (!"android.webkit.WebSettings".equals(want.getName())) return null;
+            Object s = sWebSettings;
+            if (s == null) {
+                synchronized (ActivityManagerRouting.class) {
+                    s = sWebSettings;
+                    if (s == null) {
+                        s = Class.forName("westlake.webview.InertWebSettings")
+                                .getDeclaredConstructor().newInstance();
+                        sWebSettings = s;
+                        System.err.println("[WL-WEBVIEW] InertWebSettings installed"
+                                + " for WebViewProvider.getSettings()");
+                    }
+                }
+            }
+            return s;
+        } catch (Throwable t) {
+            sWebSettingsFailed = true;
+            System.err.println("[WL-WEBVIEW] InertWebSettings unavailable: " + t);
+            return null;
+        }
+    }
+
     /**
      * An object of the given interface that answers everything with a default.
      *
@@ -2054,16 +2345,21 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
             @Override public Object invoke(Object p, Method m, Object[] args) {
                 Class<?> ret = m.getReturnType();
                 if (ret.isInterface()) return inertProxy(ret, depth + 1);
-                // Known boundary: java.lang.reflect.Proxy only implements
-                // interfaces, so an abstract *class* return type (the one that
-                // matters here is android.webkit.WebSettings, handed out by
-                // WebViewProvider.getSettings()) can only be answered with null.
-                // Callers that dereference it -- e.g.
-                // MediaAppUtil.getWebViewDefaultUserAgent() ->
-                // getSettings().getUserAgentString() -- still NPE, so those call
-                // sites are neutralised in the app dex instead (see
-                // patches/patch_base_apk.py, classes21.dex).  Say so once rather
-                // than fail silently.
+                // WebViewProvider.getSettings() returns android.webkit.WebSettings,
+                // an abstract *class*, so Proxy cannot stand in for it.  Handing
+                // back null moved the crash rather than fixing it: every caller
+                // that dereferences it dies on the main thread --
+                //   MediaAppUtil.getWebViewDefaultUserAgent()
+                //     -> getSettings().getUserAgentString()
+                //   BrowserFragment.onActivityCreated()
+                //     -> getSettings().setGeolocationEnabled(...)
+                // and onActivityCreated is a whole run of those, so neutralising
+                // call sites one at a time in the app dex is whack-a-mole.
+                // westlake.webview.InertWebSettings is a real subclass with all
+                // 104 abstract methods implemented (generated from the platform's
+                // own dex by patches/tools/gen_websettings.py).
+                Object settings = inertWebSettings(ret);
+                if (settings != null) return settings;
                 if (!ret.isPrimitive() && ret != Void.TYPE
                         && java.lang.reflect.Modifier.isAbstract(ret.getModifiers())
                         && !sInertAbstractReported) {
