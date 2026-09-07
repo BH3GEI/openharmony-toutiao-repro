@@ -16,7 +16,7 @@
 | 视频频道流 | [`37-video-channel.jpeg`](37-video-channel.jpeg) | 198 KB | ✅ 真实视频卡片 |
 | 搜索主界面 | [`38-search-activity.jpeg`](38-search-activity.jpeg) | 44 KB | ✅ 上屏，内容区空态 |
 | 返回后的信息流 | [`40-back-from-search-live-feed.jpeg`](40-back-from-search-live-feed.jpeg) | 219 KB | ✅ 销毁搜索页后信息流回到前台 |
-| 详情页 | [`39-detail-click-no-startactivity.jpeg`](39-detail-click-no-startactivity.jpeg) | 219 KB | ❌ 未取得，见下 |
+| 详情页 | [`44-detail-activity-oh-terminated.jpeg`](44-detail-activity-oh-terminated.jpeg) | 38 KB | ❌ 未取得——三条路都查到底了，见下 |
 
 热榜与搜索内容区为空是同一根因：`shared_prefs` 里没有 `device_id`/`install_id`，
 `api.toutiaoapi.com` 一律 `400 invalid user`。**这两格的"空"是服务端返回的真实状态，
@@ -70,6 +70,57 @@
 
 所以详情页要在单容器里落地，得让宿主满足 `X.DQt`。这是给宿主补接口的活
 （结构性 dex 改动，不是等宽补丁），不是适配层能从外面绕过去的。
+
+## 详情页第三条路：`aa start` 详情 Activity —— OH 主动把它 terminate 了
+
+单容器挂不上（宿主契约 `X.DQt`），点击不发起跳转（`startActivity` 计数 0），
+剩下第三条：像搜索页那样让 OH 直接拉起详情 Activity
+`com.ss.android.detail.feature.detail2.view.NewDetailActivity`。
+截图 [`44-detail-activity-oh-terminated.jpeg`](44-detail-activity-oh-terminated.jpeg)（38 KB 空白窗口）。
+
+**这一轮把这条路也查到底了，结论和以前记的不一样。** 适配层这边做得很完整：
+
+```
+[B47-SLA] ENTRY   ability=...NewDetailActivity recordId=11 wantJson.len=786
+[B47-SLA] intent.component=ComponentInfo{.../NewDetailActivity}
+          extrasKeys=17 activityInfo.theme=0x7f090002
+[B47-SLA] BEFORE scheduleTransaction className=...NewDetailActivity
+[B47-SLA] AFTER  scheduleTransaction OK
+```
+
+17 个 intent extra、Theme 兜底给出的 `0x7f090002` 都在，事务也投出去了。
+**全日志里没有任何一条提到 detail2 的异常**，Mira 的 `handleException` 也没触发。
+
+同一秒的 hilog 说明了原因——**是 OH 把这个 ability 终止掉了**：
+
+```
+[AMSI3514] Terminate ability come.
+[ARR1093]  isForce: 1
+[ARR1103]  terminate com.ss.android.detail.feature.detail2.view.NewDetailActivity
+```
+
+`Terminate ability come` 是一次显式的 TerminateAbility IPC，不是超时回收。
+所以 Activity 记录始终没产生，不是因为事务失败，而是**主线程还没执行到那条
+排队的 LaunchActivityItem，ability 就已经被 OH 拆掉了**。
+
+以前记的「事务投递了却没产生 Activity 记录」只说对了一半，
+漏掉了 OH 侧这个主动 terminate —— 之前没看 hilog，看不到。
+
+### 一条具体线索：只有它声明了 `hardwareAccelerated=false`
+
+三个 Activity 的 manifest 声明放一起看：
+
+| Activity | `hardwareAccelerated` | `configChanges` | 结果 |
+|---|---|---|---|
+| MainActivity | `0xffffffff`（true） | 4016 | ✅ 正常 |
+| SearchActivity | 未声明（继承 application） | 4016 | ✅ 正常上屏 |
+| **NewDetailActivity** | **`0`（false）** | 1952 | ❌ 被 OH terminate |
+
+被 terminate 的那一个，恰好是三个里唯一显式声明**关闭硬件加速**的。
+本仓库 WHITEBOARD 早前几节记过这套适配层在软绘窗口上的老问题
+（NativeWindow session 串号、EGL surface 被拖下水、子窗口摘 HW 加速引发的连锁）。
+**这是相关性加一个可信的机制，不是已证实的因果**——需要平台侧确认
+OH 侧对 `hardwareAccelerated=false` 的窗口走的是哪条路径、谁发的 TerminateAbility。
 
 ## 详情页跳转本身：这一轮把问题问清楚了
 

@@ -1489,3 +1489,66 @@ NPE: WebSettings.setGeolocationEnabled(boolean) on null
 
 新增脚本 `scripts/wl_mount.sh`（`SKIP_DETAIL=1` 跳过会污染 FragmentManager 的
 详情尝试；`CAND_OVERRIDE=` 指定要挂的类）。
+
+## 第二十四节：详情页三条路全部查到底（S1，2026-09-07 15:53）
+
+详情页现在有三条可能的路，这一轮把三条都走到了尽头，各自卡在完全不同的地方。
+把它们并排放着，比继续在任何一条上使劲更有用。
+
+| 路 | 卡点 | 性质 |
+|---|---|---|
+| 点击信息流条目 | `startActivity` 计数 0，应用根本没发起跳转 | 应用侧前置条件 |
+| 单容器挂载 fragment | `MainActivity cannot be cast to X.DQt` | 应用侧宿主契约 |
+| `aa start` 详情 Activity | OH 主动 `TerminateAbility`，`isForce: 1` | **平台侧** |
+
+### 第三条路的证据链（这一轮新查的）
+
+适配层这边做得很完整：
+
+```
+[B47-SLA] ENTRY   ability=...NewDetailActivity recordId=11 wantJson.len=786
+[B47-SLA] intent.component=ComponentInfo{.../NewDetailActivity}
+          extrasKeys=17 activityInfo.theme=0x7f090002
+[B47-SLA] BEFORE scheduleTransaction className=...NewDetailActivity
+[B47-SLA] AFTER  scheduleTransaction OK
+```
+
+17 个 intent extra、Theme AXML 兜底给出的 `0x7f090002` 都在，事务也投出去了。
+**全日志没有一条提到 detail2 的异常**，Mira 的 `handleException` 也没触发。
+
+同一秒的 hilog 给出原因——是 OH 把 ability 终止了：
+
+```
+[AMSI3514] Terminate ability come.
+[ARR1093]  isForce: 1
+[ARR1103]  terminate com.ss.android.detail.feature.detail2.view.NewDetailActivity
+```
+
+`Terminate ability come` 是一次**显式的 TerminateAbility IPC**，不是超时回收。
+所以 Activity 记录始终没产生，不是事务失败，而是**主线程还没执行到那条排队的
+LaunchActivityItem，ability 就被拆掉了**。
+
+**这里要更正之前的记录。** 前几节写的「事务投递了却没产生 Activity 记录，
+无异常无崩溃」只说对了一半，漏了 OH 侧这个主动 terminate——以前没看 hilog，
+在应用 stderr 里是看不到的。方向因此也要改：不该继续在 Android 侧查
+Activity 启动链路，该查**谁发的 TerminateAbility、为什么**。
+
+### 一条具体线索：只有它声明了 `hardwareAccelerated=false`
+
+从 apk 的二进制 manifest 解出三个 Activity 的声明：
+
+| Activity | `hardwareAccelerated` | `configChanges` | 结果 |
+|---|---|---|---|
+| MainActivity | `0xffffffff`（true） | 4016 | ✅ 正常 |
+| SearchActivity | 未声明（继承 application） | 4016 | ✅ 正常上屏 |
+| **NewDetailActivity** | **`0`（false）** | 1952 | ❌ 被 OH terminate |
+
+被 terminate 的那一个，恰好是三个里唯一显式**关闭硬件加速**的。
+本白板第八、九节记过这套适配层在软绘窗口上的老账（NativeWindow session 串号、
+EGL surface 被拖下水、子窗口摘 HW 加速引发的连锁）。
+
+**这是相关性 + 一个可信的机制，不是已证实的因果。** 给平台侧的问题很具体：
+OH 对 `hardwareAccelerated=false` 的 ability 走的是哪条窗口路径，
+以及这次 `isForce: 1` 的 TerminateAbility 是谁发的。
+
+新增脚本 `scripts/wl_detail.sh`（`DETAIL_ACT=` 可换目标 Activity）。

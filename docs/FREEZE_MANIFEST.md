@@ -230,6 +230,7 @@ total: 107
 | `TrafficStats.getUidRxBytes/getUidTxBytes(int)` | `onActivityStopped` | 任何 Activity 销毁必死 |
 | `AudioSystem.native_getMaxChannelCount()` | `AudioManager.isWiredHeadsetOn` | 逛过视频频道后每次 resume 必死 |
 | `AssetManager.nativeOpenAssetFd` | `Typeface.createFromAsset` | 任何 assets 自定义字体必死 |
+| OH 对 `hardwareAccelerated=false` 的 ability 发 `TerminateAbility(isForce:1)` | `aa start NewDetailActivity` | 详情页 ability 被拆，Activity 记录从未产生（whiteboard 第二十四节） |
 
 另有两项前线已在适配层自行补上，官方产线可直接采用或换成平台实现：
 `ResumeActivityItem` 补发（销毁后没人恢复下层 Activity）、
