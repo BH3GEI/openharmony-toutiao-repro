@@ -1391,3 +1391,48 @@ NPE: WebSettings.setGeolocationEnabled(boolean) on null
 热榜的 tab 确实切过去了（红色下划线在「热榜」上），渲染的是应用自己的
 「网络异常，请稍后重试」空态——`shared_prefs` 无 `device_id`/`install_id`，
 服务端一律 `400 invalid user`。这是真实状态，不是渲染缺陷。
+
+## 第二十二节：交互层冻结，交接 S3（S1，2026-09-07）
+
+前线交互层已冻结，交接件是 [`docs/FREEZE_MANIFEST.md`](docs/FREEZE_MANIFEST.md)：
+交付物哈希、复现构建命令、jar 导出清单（58 个 class_def）、107 个运行时方法的
+完整清单与分组、输入泵命令面、平台侧待补四项、板端共享现状。
+
+源码基线 `fa66f09bbdf0caae17d1a5b8b9047b0cbd47440b`。方法清单是从源码生成再与 dex 交叉核对的
+（107 + `<init>` + `<clinit>` = dex 里 109 个非合成方法），不是手数的。
+
+### 给 S3 的三条
+
+1. **`ActivityManagerRouting` 不在 boot classpath 上**，它是通过 base jar 里被
+   就地改写的 dex 字符串 `adapter.activity.ActivityManagerAdapter` →
+   `adapter.activity.ActivityManagerRouting`（同长度）注入的。统一构建库自己编
+   这个类时，只要保证这次改写等价即可，不需要动 boot image。
+2. **`/data/pr03-74e6-portable/android/framework/oh-adapter-runtime.jar` 目前是
+   多条工作流共用的同一份文件**，板子重启还会把它恢复成其中一支。产线要接管这个
+   路径，得先约定归属，否则两边互相覆盖——本轮前线就因此空跑了 6 次。
+3. **平台侧待补四项**（都是适配层缺口，不是应用问题，应用侧只是用 dex 补丁绕开）：
+   `IWindow.windowFocusChanged` 从不投递、`TrafficStats.getUid*Bytes(int)` 缺失、
+   `AudioSystem.native_getMaxChannelCount()` 缺失、`AssetManager.nativeOpenAssetFd`
+   未实现。另有两项前线已在适配层自行补上，产线可直接采用或换成平台实现：
+   `ResumeActivityItem` 补发、`dispatchAppVisibility(true)` 补投。
+
+### 一处需要更正的前提
+
+任务书写的是「AMS 拦截 startActivity / 2097205」。**板端实测不支持这个判断。**
+反编译 `oh-adapter-framework.jar` 可见 `ActivityManagerAdapter.startActivity` 会先
+`logBridged` 再 `bridgeStartAbility`，而 `logBridged` 走 `Log.d` 进 hilog。
+开 `hilog -b DEBUG` 在点击前后抓取（同一进程同时刻 `[BRIDGED] getProcessesInErrorState`
+密集刷屏，证明抓取是活的、debug 没被过滤），结果 `startActivity` 计数为 **0**：
+
+```
+[WL-INPUT] click 400.0,620.0 handled by
+  com.ss.android.article.base.feature.feed.widget.FeedItemRootLinerLayout (0 levels up)
+[wl-screens] startActivity in hilog: 0
+```
+
+也就是说**应用根本没有发起跳转**，不是 AMS 把它拦下来了——监听器跑完就结束了。
+如果 2097205 是别处观测到的错误码，那它来自另一条路径，不是信息流条目点击这条。
+这一条影响下一步该往哪儿查：应该查监听器里 `startActivity` 之前的前置条件
+（多半仍是 `device_id`/`install_id` 那条身份线），而不是 Activity 启动链路。
+
+单容器方案正是绕开这个分歧的做法：不依赖谁拦了谁，直接把页面挂进宿主容器。

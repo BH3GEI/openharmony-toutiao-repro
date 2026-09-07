@@ -241,3 +241,14 @@ total: 107
 板子重启也会把 jar 恢复成其中一支。前线的做法是备份—借用—原样还回
 （板端 `oh-adapter-runtime.jar.s2-*` / `.s3-*`，仓库 `prebuilts/oh-adapter-runtime.s2-*.jar`）。
 **统一构建库若要接管这个路径，需要先约定归属，否则两边会互相覆盖。**
+
+## 8. 源码基线
+
+| 项 | 值 |
+|---|---|
+| commit | `fa66f09bbdf0caae17d1a5b8b9047b0cbd47440b` |
+| 分支 | `main` |
+| 仓库 | `git@github.com:BH3GEI/openharmony-toutiao-repro.git` |
+
+本文件第 1 节的四个 sha256 就是这个 commit 的树上算出来的（jar 与 apk 不入库，
+按第 2 节复现后核对）。之后前线若再动交互层，会另起一份清单，不改这一份。
