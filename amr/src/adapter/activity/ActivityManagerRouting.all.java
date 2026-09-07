@@ -936,6 +936,7 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
     private static final int ACTION_MOVE = 2;
     private static final int SOURCE_TOUCHSCREEN = 0x00001002;
     private static final int FIRST_SUB_WINDOW = 1000;
+    private static final int KEYCODE_BACK = 4;
 
     private static volatile boolean sInputPumpStarted;
     private static volatile boolean sBridgeMissReported;
@@ -1012,6 +1013,18 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 performClickAt(Float.parseFloat(a[1]), Float.parseFloat(a[2]));
             } else if ("acts".equals(a[0])) {
                 dumpActivities();
+            } else if ("winfocus".equals(a[0])) {
+                dumpWindowFocus();
+            } else if ("resume".equals(a[0])) {
+                resumeUnderlyingActivity(null);
+            } else if ("back".equals(a[0])) {
+                Object top = topInputTarget();
+                Object act = topActivity();
+                if (top == null || act == null) {
+                    System.err.println("[WL-BACK] nothing to go back from");
+                } else {
+                    escalateBack(top, act);
+                }
             } else if ("stack".equals(a[0])) {
                 dumpMainThreadStack(0);
             } else if ("dump".equals(a[0])) {
@@ -1059,12 +1072,34 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
                 + " in " + steps + " steps -> " + describeTarget(vri));
     }
 
+    /**
+     * Why keys need more work than taps.
+     *
+     * ViewRootImpl runs every event through InputStage.deliver(), which starts
+     * with shouldDropInputEvent().  That predicate drops the event when
+     *
+     *     !mAttachInfo.mHasWindowFocus
+     *         && !event.isFromSource(SOURCE_CLASS_POINTER)
+     *
+     * -- i.e. an unfocused window still gets touches but silently swallows
+     * every key.  Window focus normally arrives over IWindow.windowFocusChanged,
+     * called by WMS when it picks a focused window.  The adapter's
+     * WindowSessionAdapter never makes that call (there is no such symbol
+     * anywhere in oh-adapter-runtime.jar), so mHasWindowFocus is false for the
+     * whole life of the process and BACK never reaches Activity.onKeyUp().
+     *
+     * That is the entire bug: the pump was dispatching KEYCODE_BACK into a
+     * window that was contractually required to ignore it.  So before sending a
+     * key we do what WMS would have done -- hand focus to the target window and
+     * take it away from the others.
+     */
     private static void injectKey(int keyCode) throws Exception {
         Object vri = topInputTarget();
         if (vri == null) {
             System.err.println("[WL-INPUT] key dropped: no window with an input receiver");
             return;
         }
+        focusOnly(vri);
         Class<?> ke = Class.forName("android.view.KeyEvent");
         java.lang.reflect.Constructor<?> ctor = ke.getConstructor(
                 long.class, long.class, int.class, int.class, int.class);
@@ -1075,7 +1110,405 @@ public class ActivityManagerRouting extends ActivityManagerAdapter {
         setSource(ke, upEv, 0x00000101);
         dispatch(vri, downEv);
         dispatch(vri, upEv);
-        System.err.println("[WL-INPUT] key " + keyCode + " -> " + describeTarget(vri));
+        System.err.println("[WL-INPUT] key " + keyCode + " -> " + describeTarget(vri)
+                + " focus=" + hasWindowFocus(vri));
+
+        if (keyCode != KEYCODE_BACK) return;
+
+        // BACK is the one key whose effect we can verify, so verify it.  If the
+        // top activity is not finishing a moment later the dispatch was eaten
+        // somewhere we do not control, and we fall back to the two paths that
+        // do not go through ViewRootImpl at all.
+        Object act = topActivity();
+        if (act == null) {
+            System.err.println("[WL-BACK] no activity to check");
+            return;
+        }
+        String name = act.getClass().getName();
+        if (waitFinishing(act, 1200)) {
+            System.err.println("[WL-BACK] key: " + name + " finishing after key dispatch");
+        } else {
+            System.err.println("[WL-BACK] key: " + name + " not finishing; escalating");
+            escalateBack(vri, act);
+        }
+        resumeUnderlyingActivity(act);
+    }
+
+    /**
+     * Put the activity underneath back on screen.
+     *
+     * Finishing the top activity is only half of BACK.  On a real device AMS
+     * then sends the process a ResumeActivityItem for whatever is now on top;
+     * here nothing does, so MainActivity stays paused=true stopped=true with a
+     * GONE decor and the screen keeps showing an empty window.  Send the
+     * transaction ourselves -- TransactionExecutor walks the lifecycle from
+     * wherever the activity is to RESUMED, so restart/start/resume all happen in
+     * the right order -- and then hand it the window focus too.
+     */
+    private static void resumeUnderlyingActivity(Object finished) {
+        for (int waited = 0; waited < 4000; waited += 200) {
+            try { Thread.sleep(200); } catch (InterruptedException ignored) { return; }
+            Object rec = topActivityRecord(finished);
+            if (rec == null) continue;
+            Object act = readFieldValue(rec, "activity");
+            if (act == null) continue;
+            Object paused = readFieldValue(rec, "paused");
+            Object stopped = readFieldValue(rec, "stopped");
+            boolean asleep = Boolean.TRUE.equals(paused) || Boolean.TRUE.equals(stopped);
+            if (!asleep) {
+                System.err.println("[WL-BACK] " + act.getClass().getName()
+                        + " already resumed");
+                refocusTop();
+                return;
+            }
+            Object token = readFieldValue(rec, "token");
+            if (token == null) {
+                System.err.println("[WL-BACK] no token on " + act.getClass().getName());
+                return;
+            }
+            clearWindowStopped(token);
+            if (scheduleResume(token)) {
+                try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+                System.err.println("[WL-BACK] resumed " + act.getClass().getName()
+                        + " paused=" + readFieldValue(rec, "paused")
+                        + " stopped=" + readFieldValue(rec, "stopped"));
+                refocusTop();
+            }
+            return;
+        }
+        System.err.println("[WL-BACK] nothing left to resume");
+    }
+
+    /** The frontmost record that is not the activity we just finished. */
+    private static Object topActivityRecord(Object exclude) {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object cur = at.getMethod("currentActivityThread").invoke(null);
+            Object map = readField(at, cur, "mActivities");
+            if (!(map instanceof Map)) return null;
+            Object last = null;
+            for (Object rec : ((Map<?, ?>) map).values()) {
+                if (rec == null) continue;
+                Object act = readFieldValue(rec, "activity");
+                if (act == null || act == exclude) continue;
+                last = rec;
+            }
+            return last;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static boolean scheduleResume(Object token) {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object cur = at.getMethod("currentActivityThread").invoke(null);
+            Method getThread = findMethod(at, "getApplicationThread");
+            getThread.setAccessible(true);
+            Object appThread = getThread.invoke(cur);
+
+            Class<?> ctCls = Class.forName("android.app.servertransaction.ClientTransaction");
+            Object ct = null;
+            for (Method m : ctCls.getDeclaredMethods()) {
+                if ("obtain".equals(m.getName()) && m.getParameterTypes().length == 2) {
+                    m.setAccessible(true);
+                    ct = m.invoke(null, appThread, token);
+                    break;
+                }
+            }
+            if (ct == null) {
+                System.err.println("[WL-BACK] ClientTransaction.obtain not found");
+                return false;
+            }
+            Class<?> ri = Class.forName("android.app.servertransaction.ResumeActivityItem");
+            Object item = null;
+            // obtain(isForward) / obtain(isForward, fakeFocus) / obtain(procState, ...)
+            for (Method m : ri.getDeclaredMethods()) {
+                if (!"obtain".equals(m.getName())) continue;
+                Class<?>[] p = m.getParameterTypes();
+                boolean allBool = p.length > 0;
+                for (Class<?> c : p) if (c != boolean.class) allBool = false;
+                if (!allBool) continue;
+                Object[] args = new Object[p.length];
+                for (int i = 0; i < p.length; i++) args[i] = Boolean.valueOf(i == 0);
+                m.setAccessible(true);
+                item = m.invoke(null, args);
+                break;
+            }
+            if (item == null) {
+                System.err.println("[WL-BACK] ResumeActivityItem.obtain not found");
+                return false;
+            }
+            Method set = null;
+            for (Method m : ctCls.getDeclaredMethods()) {
+                if ("setLifecycleStateRequest".equals(m.getName())) { set = m; break; }
+            }
+            if (set == null) {
+                System.err.println("[WL-BACK] setLifecycleStateRequest not found");
+                return false;
+            }
+            set.setAccessible(true);
+            set.invoke(ct, item);
+
+            Method sched = findMethod(at, "scheduleTransaction", ctCls);
+            if (sched == null) {
+                System.err.println("[WL-BACK] scheduleTransaction not found");
+                return false;
+            }
+            sched.setAccessible(true);
+            sched.invoke(cur, ct);
+            System.err.println("[WL-BACK] ResumeActivityItem scheduled");
+            return true;
+        } catch (Throwable t) {
+            System.err.println("[WL-BACK] scheduleResume failed: " + t);
+            return false;
+        }
+    }
+
+    /**
+     * ViewRootImpl.mStopped survives the activity going away and makes the root
+     * refuse to traverse, so the resumed activity would resume without ever
+     * drawing.  WindowManagerGlobal.setStoppedState() is the supported way in.
+     */
+    private static void clearWindowStopped(Object token) {
+        try {
+            Class<?> wmg = Class.forName("android.view.WindowManagerGlobal");
+            Object inst = wmg.getMethod("getInstance").invoke(null);
+            Method m = findMethod(wmg, "setStoppedState",
+                    Class.forName("android.os.IBinder"), boolean.class);
+            if (m == null) return;
+            m.setAccessible(true);
+            m.invoke(inst, token, false);
+            System.err.println("[WL-BACK] setStoppedState(false)");
+        } catch (Throwable t) {
+            System.err.println("[WL-BACK] setStoppedState failed: " + t);
+        }
+    }
+
+    /** Focus follows the window that is on top now. */
+    private static void refocusTop() {
+        try {
+            Object vri = topInputTarget();
+            if (vri != null) focusOnly(vri);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * Give the window focus the way WMS would, and take it from every other
+     * root so only one window claims it -- ViewRootImpl.windowFocusChanged() is
+     * the exact method IWindow.windowFocusChanged lands in, so this replays the
+     * missing callback rather than faking its side effects.
+     */
+    private static void focusOnly(Object target) {
+        try {
+            Class<?> wmg = Class.forName("android.view.WindowManagerGlobal");
+            Object inst = wmg.getMethod("getInstance").invoke(null);
+            List<?> roots = (List<?>) readField(wmg, inst, "mRoots");
+            if (roots == null) return;
+            for (int i = 0; i < roots.size(); i++) {
+                Object vri = roots.get(i);
+                if (vri == null) continue;
+                setWindowFocus(vri, vri == target);
+            }
+        } catch (Throwable t) {
+            System.err.println("[WL-FOCUS] failed: " + t);
+        }
+    }
+
+    private static void setWindowFocus(Object vri, boolean focused) {
+        if (hasWindowFocus(vri) == focused) return;
+        // API 30 dropped the inTouchMode argument; try both shapes.
+        Method m = findMethod(vri.getClass(), "windowFocusChanged",
+                boolean.class, boolean.class);
+        try {
+            if (m != null) {
+                m.setAccessible(true);
+                m.invoke(vri, focused, /* inTouchMode */ true);
+            } else {
+                m = findMethod(vri.getClass(), "windowFocusChanged", boolean.class);
+                if (m != null) {
+                    m.setAccessible(true);
+                    m.invoke(vri, focused);
+                }
+            }
+        } catch (Throwable t) {
+            m = null;
+            System.err.println("[WL-FOCUS] windowFocusChanged(" + focused + ") threw " + t);
+        }
+        if (m == null) {
+            // No usable entry point: set the field the predicate actually reads.
+            Object ai = readFieldValue(vri, "mAttachInfo");
+            writeBool(ai, "mHasWindowFocus", focused);
+        }
+        // windowFocusChanged() only posts a message; the field flips on the next
+        // main-thread loop.  Give it one.
+        try { Thread.sleep(120); } catch (InterruptedException ignored) {}
+        System.err.println("[WL-FOCUS] " + describeTarget(vri) + " focus -> " + focused
+                + " (now " + hasWindowFocus(vri) + ")");
+    }
+
+    private static boolean hasWindowFocus(Object vri) {
+        Object ai = readFieldValue(vri, "mAttachInfo");
+        Object v = readFieldValue(ai, "mHasWindowFocus");
+        return v instanceof Boolean && ((Boolean) v).booleanValue();
+    }
+
+    private static void writeBool(Object target, String name, boolean value) {
+        if (target == null) return;
+        Field f = findField(target.getClass(), name);
+        if (f == null) return;
+        try {
+            f.setAccessible(true);
+            f.setBoolean(target, value);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * BACK without ViewRootImpl.  Two rungs: hand the event straight to the
+     * decor view (skips the input stages and their drop predicate), then call
+     * Activity.onBackPressed() outright.  Both must run on the main thread.
+     */
+    private static void escalateBack(Object vri, final Object act) {
+        final Object decor = readFieldValue(vri, "mView");
+        if (decor != null) {
+            runOnMainSync(new Runnable() {
+                @Override public void run() {
+                    try {
+                        Class<?> ke = Class.forName("android.view.KeyEvent");
+                        java.lang.reflect.Constructor<?> c = ke.getConstructor(
+                                long.class, long.class, int.class, int.class, int.class);
+                        long t = uptimeMillis();
+                        Object d = c.newInstance(t, t, ACTION_DOWN, KEYCODE_BACK, 0);
+                        Object u = c.newInstance(t, uptimeMillis(), ACTION_UP, KEYCODE_BACK, 0);
+                        setSource(ke, d, 0x00000101);
+                        setSource(ke, u, 0x00000101);
+                        Method dk = findMethod(decor.getClass(), "dispatchKeyEvent", ke);
+                        dk.setAccessible(true);
+                        Object r1 = dk.invoke(decor, d);
+                        Object r2 = dk.invoke(decor, u);
+                        System.err.println("[WL-BACK] decor.dispatchKeyEvent down=" + r1
+                                + " up=" + r2);
+                    } catch (Throwable t) {
+                        System.err.println("[WL-BACK] decor dispatch failed: " + t);
+                    }
+                }
+            }, 3000);
+            if (waitFinishing(act, 1200)) {
+                System.err.println("[WL-BACK] decor path finished "
+                        + act.getClass().getName());
+                return;
+            }
+        }
+        runOnMainSync(new Runnable() {
+            @Override public void run() {
+                try {
+                    Method m = findMethod(act.getClass(), "onBackPressed");
+                    m.setAccessible(true);
+                    m.invoke(act);
+                    System.err.println("[WL-BACK] onBackPressed() returned");
+                } catch (Throwable t) {
+                    System.err.println("[WL-BACK] onBackPressed() failed: " + t
+                            + "; calling finish()");
+                    try {
+                        Method f = findMethod(act.getClass(), "finish");
+                        f.setAccessible(true);
+                        f.invoke(act);
+                    } catch (Throwable t2) {
+                        System.err.println("[WL-BACK] finish() failed: " + t2);
+                    }
+                }
+            }
+        }, 3000);
+        System.err.println("[WL-BACK] after escalation " + act.getClass().getName()
+                + " finishing=" + isFinishing(act));
+    }
+
+    /** The activity ActivityThread most recently resumed, or the last record. */
+    private static Object topActivity() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object cur = at.getMethod("currentActivityThread").invoke(null);
+            Object map = readField(at, cur, "mActivities");
+            if (!(map instanceof Map)) return null;
+            Object last = null;
+            Object running = null;
+            for (Object rec : ((Map<?, ?>) map).values()) {
+                if (rec == null) continue;
+                Object act = readFieldValue(rec, "activity");
+                if (act == null) continue;
+                last = act;
+                Object paused = readFieldValue(rec, "paused");
+                if (paused instanceof Boolean && !((Boolean) paused).booleanValue()) {
+                    running = act;
+                }
+            }
+            return running != null ? running : last;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static boolean isFinishing(Object act) {
+        try {
+            Method m = findMethod(act.getClass(), "isFinishing");
+            m.setAccessible(true);
+            return ((Boolean) m.invoke(act)).booleanValue();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static boolean waitFinishing(Object act, int timeoutMs) {
+        for (int waited = 0; waited < timeoutMs; waited += 100) {
+            if (isFinishing(act)) return true;
+            try { Thread.sleep(100); } catch (InterruptedException ignored) { return false; }
+        }
+        return isFinishing(act);
+    }
+
+    private static void runOnMainSync(final Runnable r, int timeoutMs) {
+        final java.util.concurrent.CountDownLatch done =
+                new java.util.concurrent.CountDownLatch(1);
+        try {
+            runOnMain(new Runnable() {
+                @Override public void run() {
+                    try { r.run(); } finally { done.countDown(); }
+                }
+            });
+            if (!done.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                System.err.println("[WL-INPUT] main-thread task timed out after "
+                        + timeoutMs + "ms");
+            }
+        } catch (Throwable t) {
+            System.err.println("[WL-INPUT] runOnMainSync failed: " + t);
+        }
+    }
+
+    /** Focus/visibility state of every window -- the evidence for the key path. */
+    private static void dumpWindowFocus() {
+        try {
+            Class<?> wmg = Class.forName("android.view.WindowManagerGlobal");
+            Object inst = wmg.getMethod("getInstance").invoke(null);
+            List<?> roots = (List<?>) readField(wmg, inst, "mRoots");
+            if (roots == null) { System.err.println("[WL-FOCUS] no mRoots"); return; }
+            System.err.println("[WL-FOCUS] ==== " + roots.size() + " root(s) ====");
+            for (int i = 0; i < roots.size(); i++) {
+                Object vri = roots.get(i);
+                if (vri == null) continue;
+                Object ai = readFieldValue(vri, "mAttachInfo");
+                System.err.println("[WL-FOCUS] [" + i + "] " + describeTarget(vri)
+                        + " hasWindowFocus=" + readFieldValue(ai, "mHasWindowFocus")
+                        + " windowVisibility=" + readFieldValue(ai, "mWindowVisibility")
+                        + " added=" + readFieldValue(vri, "mAdded")
+                        + " stopped=" + readFieldValue(vri, "mStopped")
+                        + " pausedForTransition="
+                        + readFieldValue(vri, "mPausedForTransition"));
+            }
+        } catch (Throwable t) {
+            System.err.println("[WL-FOCUS] dump failed: " + t);
+        }
     }
 
     private static Object motionEvent(long downTime, long eventTime, int action, float x, float y)

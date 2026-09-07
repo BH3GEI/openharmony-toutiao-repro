@@ -63,6 +63,13 @@ DEX_PATCHES = {
          "AsyncImageView.<clinit>: new-instance ColorMatrixColorFilter -> const/4 v1,#0 ; nop"),
         (0x7E4CB2, bytes([0x70, 0x20, 0xD2, 0x5E, 0x01, 0x00]), NOP2 * 3,
          "AsyncImageView.<clinit>: invoke-direct <init>([F)V -> nop x3 (field ends up null)"),
+        # initEmojiIconLayout(): the detail page's comment bar inflates its
+        # emoji keyboard from assets/emoticon.conf, which this build does not
+        # ship.  Mira swallows the IOException and hands back a null config, so
+        # the inflate dies with InflateException on the main thread the moment a
+        # detail page opens.  The emoji panel is not on the critical path.
+        (0x65848C, bytes([0x62, 0x06, 0x3C, 0x5F]), RETURN_VOID + NOP2,
+         "initEmojiIconLayout(): entry -> return-void ; nop"),
     ],
     "classes8.dex": [
         (0x74BB08, bytes([0x62, 0x02, 0x8E, 0x7A]), RETURN_VOID + NOP2,
@@ -97,6 +104,22 @@ DEX_PATCHES = {
     "classes16.dex": [
         (0x526E6E, bytes([0x39, 0x00, 0x5A, 0x00]), NOP2 * 2,
          'X/4Li.a(): if-nez v0,+90 (TextUtils.isEmpty(appName)) -> nop x2'),
+        # X.46Y.h(Z)V -- the per-activity network traffic sampler.
+        #
+        # It is the only method in the app that calls
+        # TrafficStats.getUidRxBytes(int) / getUidTxBytes(int), and the adapter's
+        # android.net.TrafficStats (adapter-mainline-stubs.jar) declares neither.
+        # The call therefore throws NoSuchMethodError -- and it is reached from
+        # X.46e.onActivityStopped, i.e. from Activity.onStop on the *main*
+        # thread, inside ActivityThread's StopActivityItem.  Nothing catches it,
+        # so ActivityThread.main unwinds and the process exits.
+        #
+        # That made every activity teardown fatal: pressing BACK out of
+        # SearchActivity killed the process at the moment the search page
+        # finished.  h() returns void and only feeds telemetry counters, so
+        # returning immediately costs nothing.
+        (0x4D54F0, bytes([0x52, 0xC0, 0x56, 0x16]), RETURN_VOID + NOP2,
+         "X.46Y.h(Z)V: entry -> return-void ; nop (TrafficStats.getUid*Bytes)"),
     ],
     # NewDetailActivity.preCreateWebView() -> return-void.
     #

@@ -1113,3 +1113,102 @@ api.toutiaoapi.com 响应：{"base_resp":{"status_code":400,"status_message":"in
 热榜与搜索内容区为空是同一根因：`shared_prefs` 无 `device_id`/`install_id`，
 `api.toutiaoapi.com` 一律 `400 invalid user`。这两格的"空"是服务端返回的真实状态，
 不是渲染缺陷——我没有伪造内容。
+
+---
+
+## 第十四节：返回键 —— 适配层从不投递窗口焦点（S1，2026-09-07）
+
+自动化巡检一直断在第 5 步：搜索页派发 `key 4` 之后 Activity 不 finish。
+日志只说事件投出去了（`[WL-INPUT] key 4 -> ViewRootImpl(type=1 …)`），
+所以之前一直以为是投递目标选错了窗口。不是。
+
+### 根因
+
+AOSP `ViewRootImpl.InputStage.deliver()` 的第一步就是 `shouldDropInputEvent()`：
+
+```java
+else if ((!mAttachInfo.mHasWindowFocus
+        && !q.mEvent.isFromSource(InputDevice.SOURCE_CLASS_POINTER)
+        && !isAutofillUiShowing()) || mStopped || ...) {
+    return true;   // 丢弃
+}
+```
+
+**没有窗口焦点的窗口照收触摸（pointer 被显式豁免），但把每一个按键都丢掉。**
+这正好解释了此前的现象组合：`tap` 全部生效，`key` 一个都不生效。
+
+焦点本该由 WMS 通过 `IWindow.windowFocusChanged` 送进应用进程。适配层的
+`WindowSessionAdapter` 从不做这个调用——`oh-adapter-runtime.jar` 的 dex 里
+连 `windowFocusChanged` 这个字符串都没有。于是 `mAttachInfo.mHasWindowFocus`
+在整个进程生命周期里恒为 `false`。
+
+板端实测坐实（新增 `winfocus` 探针）：三个 root 全是 `hasWindowFocus=false`。
+
+### 修法
+
+`injectKey()` 在投键之前先做 WMS 少做的那件事：调 `ViewRootImpl.windowFocusChanged()`
+把焦点给目标窗口、并从其它 root 收回（真机上同一时刻只有一个窗口有焦点）。
+这不是伪造副作用——`windowFocusChanged()` 正是 `IWindow.windowFocusChanged`
+落地的那个方法，等于把缺的那一通回调补上。
+
+```
+[WL-FOCUS] ViewRootImpl(…) focus -> true (now true)
+[WL-INPUT] key 4 -> ViewRootImpl(…) focus=true
+[WL-BACK]  key: com.android.bytedance.search.SearchActivity finishing after key dispatch
+[WL-ACTS]  ==== 1 record(s) ====        ← 销毁前是 2 条
+```
+
+一次命中，不需要任何兜底路径（`escalateBack()` 的 decor 直投 / `onBackPressed()`
+两级降级留在代码里，但这次没有触发）。
+
+## 第十五节：Activity 销毁必死 —— `TrafficStats.getUidRxBytes` 平台缺口（S1，2026-09-07）
+
+返回键一通，进程立刻死在销毁路上：
+
+```
+java.lang.NoSuchMethodError: No static method getUidRxBytes(I)J in class
+  Landroid/net/TrafficStats; or its super classes
+  (declaration of 'android.net.TrafficStats' appears in
+   /system/android/framework/adapter-mainline-stubs.jar)
+    at X.46Y.h → X.46Y.c → X.46h.b → X.46e.a → X.46e.onActivityStopped
+    at Application.dispatchActivityStopped → Activity.onStop
+    at ActivityThread.handleStopActivity ← StopActivityItem.execute
+    at ActivityThread.main
+```
+
+**这是适配层的平台缺口，不是应用的问题**：`android.net.TrafficStats` 的桩里
+有 `getTotalRxBytes` / `getTotalTxBytes` / `tagSocket`，唯独少了
+`getUidRxBytes(int)` 和 `getUidTxBytes(int)`。
+
+危害范围比看上去大得多：它挂在 `onActivityStopped` 上，也就是**任何一次
+Activity 销毁**都会在主线程抛出，没有任何 catch，`ActivityThread.main` 直接退栈、
+进程退出。只要按一次返回键就必死。
+
+- **平台侧（建议西湖修）**：给 `adapter-mainline-stubs.jar` 的
+  `android.net.TrafficStats` 补上这两个静态方法。
+- **应用侧（本仓库已修）**：`X.46Y.h(Z)V` 是全 apk 唯一调用这两个 API 的方法，
+  返回 void，纯遥测。入口 4 字节 `iget`（`52 c0 56 16`）改成 `return-void ; nop`，
+  等宽、不动任何偏移。见 `patches/patch_base_apk.py` 的 `classes16.dex` 条目，
+  产物 `base.final11.apk`。
+
+修完实测：整条 7 步巡检全程 `alive=1`，包括销毁那一步（此前 `alive=0`）。
+
+## 第十六节：销毁之后没人恢复下层 Activity（S1，2026-09-07）
+
+搜索页销毁了，但屏幕变成一张空白窗口（38 KB）。原因是真机上 AMS 这时会给进程补发
+一条 `ResumeActivityItem`，这里没有：MainActivity 停在 `paused=true stopped=true`、
+decor 是 GONE。
+
+`resumeUnderlyingActivity()` 自己发这条事务——`ClientTransaction` +
+`ResumeActivityItem` + `ActivityThread.scheduleTransaction`，让 `TransactionExecutor`
+自己把生命周期从当前状态走到 RESUMED（restart→start→resume 顺序由它保证），
+再用 `WindowManagerGlobal.setStoppedState(token, false)` 解开 `ViewRootImpl.mStopped`
+（否则 root 拒绝 traverse，resume 了也不画），最后把焦点交还给新的顶层窗口。
+
+**这段代码尚未板端实测。** 板子被并行的微信工作流占用：
+`/data/pr03-74e6-portable/android/framework/oh-adapter-runtime.jar` 是两条流共用的
+同一个文件，本轮期间被换成了另一支构建（`WL-TAP` / `WL-CONSENT` / `WL-THEME-SYNC`，
+不含输入泵），我连跑三次都跑空。上面那次成功采集是借用窗口跑的，跑完已把对方的 jar
+原样还回（板端备份 `oh-adapter-runtime.jar.s2-97a158f7`，仓库备份
+`prebuilts/oh-adapter-runtime.s2-97a158f7.jar`，md5 `97a158f7577bba16a57d74c2da3b2af9`
+已核对）。两支 jar 特性集互不包含，**二进制合不了，要真正合流需要对方的源码**。

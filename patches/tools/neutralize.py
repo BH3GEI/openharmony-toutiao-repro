@@ -13,14 +13,24 @@ hotfix preamble
 which is a 4-byte 21c instruction, so overwriting it with `return-void ; nop`
 keeps every later offset and branch target byte-identical.  Only valid for
 methods returning void (or whose result is ignored) -- checked by the caller.
+
+Methods without that preamble open with some other field read instead -- an
+iget/sget of their own state.  Those are 4 bytes too (21c or 22c), so the same
+rewrite applies; the allowlist below is just there to refuse anything narrower
+or wider, which would shift every later offset.
 """
 import zipfile, zlib, hashlib, struct, os, sys
+
+# opcode -> mnemonic, all 4-byte field accesses that commonly open a method
+ENTRY_OPS = {0x52: 'iget', 0x54: 'iget-object', 0x60: 'sget', 0x62: 'sget-object'}
 
 def neutralize(raw, code_off, label):
     b=bytearray(raw)
     insns=code_off+16
     op=b[insns]
-    assert op==0x62, f"{label}: expected sget-object (0x62) at method entry, got 0x{op:02x}"
+    assert op in ENTRY_OPS, (f"{label}: entry opcode 0x{op:02x} is not a 4-byte field "
+                             f"access ({', '.join(ENTRY_OPS.values())}); refusing to "
+                             f"rewrite, it would change the encoded width")
     b[insns:insns+4]=bytes([0x0e,0x00,0x00,0x00])   # return-void ; nop
     b[12:32]=hashlib.sha1(bytes(b[32:])).digest()
     struct.pack_into('<I', b, 8, zlib.adler32(bytes(b[12:])) & 0xffffffff)

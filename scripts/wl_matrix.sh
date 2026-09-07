@@ -14,7 +14,9 @@
 # Requires on the board:
 #   - adapter jar built from ActivityManagerRouting.all.java (input pump, window
 #     ranking, VelocityTracker loader, theme back-fill, WebView guard)
-#   - base.final10.apk (or newer) as the app's base.apk
+#   - base.final11.apk (or newer) as the app's base.apk -- anything older dies
+#     with NoSuchMethodError on TrafficStats.getUidRxBytes the moment an
+#     activity stops, i.e. on the very first BACK
 #   - libwlveltrack.so in the app's native lib dir
 #
 # Env: SETTLE (seconds to wait after each gesture, default 30)
@@ -49,6 +51,16 @@ shot() {   # shot <name>
     echo "$(stat -c %s "/data/local/tmp/WM_$1.jpeg" 2>/dev/null)"
 }
 
+# A pump command whose only product is log output -- no gesture, no capture.
+probe() {  # probe <pump-command>
+    mark=$(stat -c %s "$LOG" 2>/dev/null || echo 1)
+    echo "$*" > $C
+    sleep 4
+    tail -c +$mark "$LOG" 2>/dev/null \
+        | grep -o 'WL-FOCUS].\{0,110\}\|WL-ACTS].\{0,110\}\|WL-BACK].\{0,110\}' \
+        | head -12 | sed 's/^/[wl-matrix]   /'
+}
+
 step() {   # step <name> <pump-command> <settle>
     name=$1; cmd=$2; wait=${3:-$SETTLE}
     mark=$(stat -c %s "$LOG" 2>/dev/null || echo 1)
@@ -58,7 +70,8 @@ step() {   # step <name> <pump-command> <settle>
     alive=$(kill -0 "$PID" 2>/dev/null && echo 1 || echo 0)
     say "$name  '$cmd'  size=$size alive=$alive"
     tail -c +$mark "$LOG" 2>/dev/null \
-        | grep -o 'WL-INPUT].\{0,90\}\|WL-WIN] addToDisplay.\{0,40\}' | head -2
+        | grep -o 'WL-INPUT].\{0,110\}\|WL-BACK].\{0,110\}\|WL-WIN] addToDisplay.\{0,40\}' \
+        | head -6 | sed 's/^/[wl-matrix]   /'
 }
 
 kill_app
@@ -116,8 +129,14 @@ sleep 45
 dismiss_usb_dialog
 say "04-search size=$(shot 04-search) alive=$(kill -0 $PID 2>/dev/null && echo 1 || echo 0) wlwin=$(tail -c +$mark "$LOG" | grep -c 'WL-WIN')"
 
+# Window focus is what decides whether a key survives ViewRootImpl's input
+# stages, so record it either side of the BACK press.
+probe winfocus
+probe acts
+
 # 搜索页 -> 返回
-step 05-back-from-search "key 4" 25
+step 05-back-from-search "key 4" 30
+probe acts
 
 # 个人中心
 step 06-mine "tap 1050 1870"
